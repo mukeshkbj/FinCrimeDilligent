@@ -15,4 +15,5 @@ output/.llm-cache/
 *.jev.jsonl
 ui/analyst_labels.jsonl
 docs/internal/
+data/internal/
 .omc/
