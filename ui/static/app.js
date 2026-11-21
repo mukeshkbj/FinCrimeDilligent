@@ -9,6 +9,7 @@ const state = {
   playing: false,
   speed: 1,
   mode: "step",
+  labels: { decisions: {}, reason_codes: {}, customer: {} },
 };
 
 function esc(value) {
@@ -39,9 +40,85 @@ function chipId(id) {
 function $(id) { return document.getElementById(id); }
 
 function outcomeClass(text) {
-  if (text === "Cleared") return "cleared";
-  if (text === "Sent to compliance" || text === "Kept open") return "kept";
+  const value = String(text || "");
+  if (value === "DIFFERENT_ENTITY" || value.startsWith("DIFFERENT_ENTITY") || /cleared/i.test(value)) return "cleared";
+  if (value === "SAME_ENTITY" || value.startsWith("SAME_ENTITY") || /compliance|kept open/i.test(value)) return "kept";
   return "review";
+}
+
+function plainFrom(map, code) {
+  const table = (state.labels && state.labels[map]) || {};
+  return table[code] || "";
+}
+
+function codeWithPlain(code, map) {
+  if (!code) return "";
+  const plain = plainFrom(map, code);
+  if (!plain || plain === code) return code;
+  return `${code} · ${plain}`;
+}
+
+function plainDecision(decision) {
+  return plainFrom("decisions", decision) || decision || "";
+}
+
+function decisionLabel(decision) {
+  return codeWithPlain(decision, "decisions");
+}
+
+function reasonCodeLabel(code) {
+  return codeWithPlain(code, "reason_codes");
+}
+
+function customerLabel(customerId) {
+  if (!customerId) return "not available";
+  if (customerId === "AMBIGUOUS") return codeWithPlain(customerId, "customer");
+  return customerId;
+}
+
+function renderGlossary(labels) {
+  const host = $("glossary-list");
+  if (!host || !labels) return;
+  const blocks = [
+    ["Decisions", labels.decisions || {}],
+    ["Reason codes", labels.reason_codes || {}],
+    ["Customer record", labels.customer || {}],
+  ];
+  const extras = [
+    ["Sanctions", "Government lists of people and companies banks must not deal with."],
+    ["PEP", "Politically exposed person — a public official or family member, higher corruption risk."],
+    ["Screening hit", "A watchlist profile whose name looks like one of our customers."],
+    ["Alert", "One customer's hits grouped together."],
+    ["SAR", "Suspicious Activity Report filed with the UK National Crime Agency; a confirmed match may lead to one."],
+  ];
+  const codeItems = blocks.map(([title, table]) => {
+    const rows = Object.entries(table).map(([code, plain]) =>
+      `<li><strong>${esc(code)}.</strong> ${esc(plain)}</li>`
+    ).join("");
+    return `<li class="glossary-group"><strong>${esc(title)}</strong><ul>${rows}</ul></li>`;
+  }).join("");
+  const extraItems = extras.map(([term, plain]) =>
+    `<li><strong>${esc(term)}.</strong> ${esc(plain)}</li>`
+  ).join("");
+  host.innerHTML = `${codeItems}${extraItems}`;
+}
+
+function renderFilters() {
+  const host = $("filters");
+  if (!host) return;
+  const buttons = [
+    ["review", decisionLabel("REVIEW"), true],
+    ["review_name_dob", "Name and date agree", false],
+    ["cleared", decisionLabel("DIFFERENT_ENTITY"), false],
+    ["kept", decisionLabel("SAME_ENTITY"), false],
+  ];
+  host.innerHTML = buttons.map(([filter, label, primary]) => {
+    const cls = primary ? ' class="primary"' : "";
+    return `<button type="button" data-filter="${esc(filter)}"${cls}>${esc(label)}</button>`;
+  }).join("");
+  host.querySelectorAll("button").forEach((button) => {
+    button.onclick = () => loadQueue(button.dataset.filter);
+  });
 }
 
 async function openRecord(recordId) {
@@ -98,15 +175,15 @@ function renderFunnel(summary) {
     [funnel.customer_found, "Customer found"],
   ];
   const outcomes = [
-    ["cleared", funnel.cleared, "Cleared"],
-    ["kept", funnel.kept_open, "Sent to compliance"],
-    ["review", funnel.review, "Sent to review"],
+    ["cleared", funnel.cleared, "DIFFERENT_ENTITY"],
+    ["kept", funnel.kept_open, "SAME_ENTITY"],
+    ["review", funnel.review, "REVIEW"],
   ];
   const main = steps.map(([count, label]) =>
     `<div class="funnel-step"><strong>${esc(count)}</strong><span>${esc(label)}</span></div>`
   ).join('<span class="funnel-arrow" aria-hidden="true">→</span>');
-  const split = outcomes.map(([kind, count, label]) =>
-    `<div class="outcome-tile ${kind}"><strong>${esc(count)}</strong><span>${esc(label)}</span></div>`
+  const split = outcomes.map(([kind, count, code]) =>
+    `<div class="outcome-tile ${kind}"><strong>${esc(count)}</strong><span class="code">${esc(code)}</span><span>${esc(plainDecision(code))}</span></div>`
   ).join("");
   $("funnel-row").innerHTML = `${main}<span class="funnel-arrow" aria-hidden="true">→</span><div class="funnel-outcomes">${split}</div>`;
 }
@@ -241,7 +318,8 @@ function syncPlaybackUi() {
   const count = $("step-count");
   if (!count) return;
   const step = state.steps[state.index];
-  const title = step ? ((step.simple && step.simple.plain_code) || step.title) : "";
+  const raw = step ? ((step.detailed && step.detailed.reason_code) || step.title) : "";
+  const title = reasonCodeLabel(raw) || raw;
   const modeLabel = state.playing ? "Auto" : "Step";
   count.textContent = `${modeLabel} · Step ${state.index + 1} of ${state.steps.length}${title ? ` · ${title}` : ""}`;
 }
@@ -252,8 +330,9 @@ function renderTimeline() {
   host.innerHTML = state.steps.map((step, index) => {
     const star = step.wow ? " ★" : "";
     const current = index === state.index ? ' aria-current="true"' : "";
-    const kind = outcomeClass((step.simple && step.simple.outcome) || "");
-    const title = (step.simple && step.simple.plain_code) || step.title;
+    const kind = outcomeClass((step.detailed && step.detailed.decision) || (step.simple && step.simple.outcome) || "");
+    const raw = (step.detailed && step.detailed.reason_code) || step.title;
+    const title = reasonCodeLabel(raw) || (step.simple && step.simple.plain_code) || raw;
     const short = String(step.id || "").replace(/^H-/, "");
     return `<button type="button" class="timeline-chip ${kind}" data-step="${index}"${current} title="${esc(step.id)} · ${esc(title)}">${esc(short)}${star}</button>`;
   }).join("");
@@ -288,7 +367,7 @@ function renderWorkflow(flow) {
     return;
   }
   const decision = flow.decision || "";
-  const plain = decision === "DIFFERENT_ENTITY" ? "Cleared" : decision === "SAME_ENTITY" ? "Sent to compliance" : decision === "REVIEW" ? "Sent to review" : decision;
+  const label = decisionLabel(decision);
   const stages = flow.stages.map((stage, index) => {
     let body = "";
     if (stage.rows) {
@@ -302,9 +381,12 @@ function renderWorkflow(flow) {
         </div>`).join("");
     } else if (stage.key === "decision") {
       const ids = (stage.evidence || []).length ? stage.evidence.map(chipId).join(" ") : "not available";
+      const code = stage.reason_code || flow.reason_code || "";
       body = `
-        <p class="dec-word dec-${esc(stage.decision)}">${esc(plain)}</p>
+        <p class="dec-word dec-${esc(stage.decision)}">${esc(decisionLabel(stage.decision || decision))}</p>
         <dl>
+          <dt>Decision</dt><dd><span class="dec-word dec-${esc(stage.decision)}">${esc(decisionLabel(stage.decision || decision) || "not available")}</span></dd>
+          <dt>Reason code</dt><dd>${esc(reasonCodeLabel(code) || "not available")}</dd>
           <dt>Why</dt><dd class="reason">${withChips(stage.reason)}</dd>
           <dt>Evidence</dt><dd>${ids}</dd>
         </dl>`;
@@ -321,7 +403,7 @@ function renderWorkflow(flow) {
   }).join("");
   panel.innerHTML = `
     <div class="wf-head">
-      <p class="card-kicker">${esc(plain)}</p>
+      <p class="card-kicker">${esc(label)}</p>
       <h2>${esc(flow.list_name || "")}</h2>
     </div>
     <div class="pipeline">${stages}</div>`;
@@ -344,7 +426,7 @@ function renderStep() {
         <pre class="memo-text">${esc(memo.text)}</pre>
         <div class="memo-actions">
           <button type="button" id="copy-memo">Copy memo</button>
-          <button type="button" id="draft-memo" ${draftAvailable ? "" : "disabled"} title="${draftAvailable ? "Reword with Grok" : "Add OPENROUTER_API_KEY and restart"}">Draft wording</button>
+          <button type="button" id="draft-memo" ${draftAvailable ? "" : "disabled"} title="${draftAvailable ? "Reword with Grok" : "Add OPENROUTER_API_KEY or XAI_API_KEY and restart"}">Draft wording</button>
         </div>
         <p class="meta" id="draft-label" hidden></p>
         <pre class="memo-text" id="draft-text" hidden></pre>
@@ -352,8 +434,8 @@ function renderStep() {
   $("panel-simple").innerHTML = `
     <article class="card now">
       <p class="card-kicker">${initials} · ${simple.screened_on || ""} · ${simple.rule}${step.wow ? " · starred" : ""}</p>
-      <h2>${step.id} · ${esc(simple.plain_code || step.title)}</h2>
-      <p class="outcome ${outcomeClass(simple.outcome)}">${simple.outcome}</p>
+      <h2>${step.id} · ${esc(reasonCodeLabel(detailed.reason_code || step.title) || simple.plain_code || step.title)}</h2>
+      <p class="outcome ${outcomeClass((detailed && detailed.decision) || simple.outcome)}">${esc(decisionLabel((detailed && detailed.decision) || simple.outcome))}</p>
       <p><strong>What was asked.</strong> ${esc(simple.asked)}</p>
       <p><strong>What happened.</strong> ${withChips(simple.happened)}</p>
       <p class="meta">${esc(simple.screened_name || "")} was screened against ${esc(simple.hit_name || "the list name")}.</p>
@@ -401,25 +483,35 @@ function renderStep() {
     }
   }
   const jev = detailed.jev || {};
-  const jevLine = jev.judge
-    ? `Judge ${jev.judge.decision} / ${jev.judge.reason_code}. Evaluate ${jev.evaluate.agrees ? "agrees" : "disagrees"}. Verify ${jev.verify.ok ? "ok" : "failed"}. ${jev.downgraded ? "Downgraded to review." : "Not downgraded."}`
-    : "J/E/V log is not beside this output file.";
+  const jevHtml = jev.judge
+    ? `<section class="panel"><h3>Judge, evaluate, verify</h3><p>Judge ${esc(decisionLabel(jev.judge.decision))} / ${esc(reasonCodeLabel(jev.judge.reason_code))}. Evaluate ${jev.evaluate.agrees ? "agrees" : "disagrees"}. Verify ${jev.verify.ok ? "ok" : "failed"}. ${jev.downgraded ? "Downgraded to REVIEW." : "Not downgraded."}</p><p class="meta">${detailed.model_note || ""} ${detailed.confidence_note || ""}</p></section>`
+    : "";
   const trail = (detailed.trail || []).map((hop) => `<div class="hop"><strong>${hop.hop}.</strong> ${hop.detail}</div>`).join("");
   const brief = detailed.brief;
   const briefHtml = brief
     ? `<p>${(brief.missing || []).join(" ")}</p><p>The one document that would settle it: ${brief.would_settle}</p>`
     : "<p>This hit is not waiting for a person.</p>";
+  const evidenceIds = detailed.evidence
+    || ((detailed.why && detailed.why.evidence) ? detailed.why.evidence.map((item) => item.id) : []);
+  const evidenceHtml = evidenceIds.length ? evidenceIds.map(chipId).join(" ") : "not available";
   $("panel-detailed").innerHTML = `
     <article class="card now">
-      <p class="card-kicker">${step.id} · ${step.title}</p>
-      <h2>${detailed.decision || ""} · ${detailed.reason_code || ""}</h2>
+      <p class="card-kicker">${step.id} · ${esc(reasonCodeLabel(detailed.reason_code || step.title))}</p>
+      <h2>${esc(decisionLabel(detailed.decision))} · ${esc(reasonCodeLabel(detailed.reason_code))}</h2>
       <p><span class="tag real">REAL</span><span class="tag real">rules</span><span class="tag gap">no confidence number in the file</span></p>
-      <section class="panel"><h3>Inputs</h3><p>Hit ${detailed.hit_id} · alert ${detailed.alert_id} · customer ${detailed.customer_record_id}</p>
+      <section class="panel"><h3>Inputs</h3><p>Hit ${detailed.hit_id} · alert ${detailed.alert_id} · customer ${esc(customerLabel(detailed.customer_record_id))}</p>
         <p>Screened ${detailed.screened && detailed.screened.name} · list name ${detailed.hit && detailed.hit.name}</p></section>
-      <section class="panel"><h3>Why this result</h3><p>${detailed.why ? detailed.why.answer : ""}</p><p class="meta">${detailed.why ? detailed.why.from : ""}</p>${fieldsTable(detailed.why && detailed.why.evidence)}</section>
+      <section class="panel"><h3>Why this result</h3>
+        <dl>
+          <dt>Decision</dt><dd><span class="dec-word dec-${esc(detailed.decision || "")}">${esc(decisionLabel(detailed.decision) || "not available")}</span></dd>
+          <dt>Reason code</dt><dd>${esc(reasonCodeLabel(detailed.reason_code) || "not available")}</dd>
+          <dt>Why</dt><dd class="reason">${withChips(detailed.why ? detailed.why.answer : detailed.reason)}</dd>
+          <dt>Evidence</dt><dd>${evidenceHtml}</dd>
+        </dl>
+        <p class="meta">${detailed.why ? detailed.why.from : ""}</p>${fieldsTable(detailed.why && detailed.why.evidence)}</section>
       <section class="panel"><h3>Review brief</h3>${briefHtml}</section>
       <section class="panel"><h3>Evidence trail</h3>${trail || "<p>No hops recorded.</p>"}</section>
-      <section class="panel"><h3>Judge, evaluate, verify</h3><p>${jevLine}</p><p class="meta">${detailed.model_note || ""} ${detailed.confidence_note || ""}</p></section>
+      ${jevHtml}
       <section class="panel"><h3>Demo note</h3>
         <p>Demo: this writes a local label only. The scored file is not changed.</p>
         <button type="button" id="override" class="demo">Demo: leave this for a person</button>
@@ -454,9 +546,12 @@ function showView(name) {
 
 async function loadQueue(filter) {
   const body = await getJSON("/api/queue?filter=" + encodeURIComponent(filter));
-  $("queue").innerHTML = body.hits.map((hit) =>
-    `<button type="button" data-hit="${hit.hit_id}">${hit.hit_id} · ${hit.name || ""} · ${hit.decision} · ${hit.reason_code} · J/E/V ${hit.jev}</button>`
-  ).join("") || "<p>None in this filter.</p>";
+  $("queue").innerHTML = body.hits.map((hit) => {
+    const jevBit = hit.jev ? ` · J/E/V ${hit.jev}` : "";
+    const decision = hit.decision_label || decisionLabel(hit.decision);
+    const code = hit.reason_code_label || reasonCodeLabel(hit.reason_code);
+    return `<button type="button" data-hit="${hit.hit_id}">${esc(hit.hit_id)} · ${esc(hit.name || "")} · ${esc(decision)} · ${esc(code)}${esc(jevBit)}</button>`;
+  }).join("") || "<p>None in this filter.</p>";
   $("queue").setAttribute("aria-label", `${body.count} hits in this filter`);
 }
 
@@ -472,8 +567,8 @@ async function openHit(hitId) {
       rule: "Your rules",
       asked: "Opened from the queue.",
       happened: body.row.reason,
-      outcome: body.row.decision === "DIFFERENT_ENTITY" ? "Cleared" : body.row.decision === "SAME_ENTITY" ? "Sent to compliance" : "Left for you",
-      plain_code: body.row.reason_code,
+      outcome: plainDecision(body.row.decision) || "Needs a person",
+      plain_code: reasonCodeLabel(body.row.reason_code) || body.row.reason_code,
       screened_name: "",
       screened_on: "",
       hit_name: "",
@@ -483,6 +578,8 @@ async function openHit(hitId) {
     detailed: {
       decision: body.row.decision,
       reason_code: body.row.reason_code,
+      reason: body.row.reason,
+      evidence: body.row.evidence || [],
       customer_record_id: body.row.customer_record_id,
       alert_id: body.row.alert_id,
       hit_id: hitId,
@@ -517,6 +614,8 @@ async function start() {
     button.onclick = () => applyTheme(button.dataset.theme);
   });
   const config = await getJSON("/api/config");
+  state.labels = config.labels || state.labels;
+  renderGlossary(state.labels);
   $("app-name").textContent = config.app_name;
   document.title = config.app_name;
   $("outcome").textContent = config.outcome;
@@ -525,7 +624,9 @@ async function start() {
   $("banner").textContent = config.practice_banner;
   $("promises").innerHTML = (config.promises || []).map((line) => `<li>${line}</li>`).join("");
   $("real-line").textContent = "Decisions: real recorded file. Records: real. Model: not used.";
+  renderFilters();
   const summary = await getJSON("/api/summary");
+  if (summary.labels) state.labels = summary.labels;
   renderSummary(summary);
   try {
     const matchers = await getJSON("/static/matchers.json");
@@ -582,9 +683,6 @@ async function start() {
   };
   document.querySelectorAll(".speed button").forEach((button) => {
     button.onclick = () => setSpeed(button.dataset.speed);
-  });
-  document.querySelectorAll("#filters button").forEach((button) => {
-    button.onclick = () => loadQueue(button.dataset.filter);
   });
   $("queue").addEventListener("click", (event) => {
     const button = event.target.closest("button");

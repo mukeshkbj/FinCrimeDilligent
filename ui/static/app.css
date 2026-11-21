@@ -85,6 +85,7 @@ button { min-height: 36px; }
 .shell,
 .desk,
 .run-overview,
+.matchers,
 .about-run,
 .queue-wrap {
   width: var(--measure);
@@ -548,6 +549,18 @@ th { color: var(--ink-soft); font-weight: 600; }
 .outcome-tile.kept { background: var(--accent-soft); color: var(--accent); }
 .outcome-tile.review { background: var(--wait-soft); color: var(--wait); }
 .outcome-tile span { color: inherit; }
+.outcome-tile .code {
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.9;
+}
+.glossary-group { margin: 0.6rem 0; }
+.glossary-group > strong { display: block; margin-bottom: 0.25rem; }
+.glossary-group ul { margin: 0.25rem 0 0.5rem 1rem; padding: 0; }
+.glossary-group li { margin: 0.2rem 0; }
 
 .bar-wrap { margin: 0; }
 .bar {
@@ -631,7 +644,7 @@ th { color: var(--ink-soft); font-weight: 600; }
   margin: 0 0 var(--space-3);
 }
 .glossary ul { padding-left: 1.1em; margin: var(--space-2) 0 0; }
-.matchers { margin-top: var(--space-3); }
+.matchers { margin-top: var(--space-3); margin-bottom: var(--space-4); }
 .matchers table {
   width: 100%;
   background: var(--bg);
@@ -731,6 +744,7 @@ th { color: var(--ink-soft); font-weight: 600; }
 /* —— Screenshot modes —— */
 body[data-shot="funnel"] .shell,
 body[data-shot="funnel"] .desk,
+body[data-shot="funnel"] .matchers,
 body[data-shot="funnel"] .about-run,
 body[data-shot="funnel"] .queue-wrap,
 body[data-shot="funnel"] .kpis,
@@ -752,6 +766,7 @@ body[data-shot="workflow"] .story-bar,
 body[data-shot="workflow"] .view-chrome,
 body[data-shot="workflow"] .story-aside,
 body[data-shot="workflow"] .run-overview,
+body[data-shot="workflow"] .matchers,
 body[data-shot="workflow"] .about-run,
 body[data-shot="workflow"] .queue-wrap { display: none !important; }
 body[data-shot="workflow"] .desk { display: block; width: min(1240px, calc(100% - 24px)); margin: 16px auto; }
