@@ -1,6 +1,15 @@
 "use strict";
 
-const state = { steps: [], index: 0, view: "workflow", timer: null };
+const SPEEDS = { 0.5: 3200, 1: 1600, 2: 800 };
+const state = {
+  steps: [],
+  index: 0,
+  view: "workflow",
+  timer: null,
+  playing: false,
+  speed: 1,
+  mode: "step",
+};
 
 function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
@@ -165,17 +174,96 @@ function renderSummary(summary) {
   }).join("");
 }
 
-function renderRail() {
-  $("rail").innerHTML = state.steps.map((step, index) => {
-    const star = step.wow ? '<span class="star"> ★</span>' : "";
-    const current = index === state.index ? ' aria-current="true"' : "";
-    const title = (step.simple && step.simple.plain_code) || step.title;
-    return `<button type="button" data-step="${index}"${current}>${step.id} ${esc(title)}${star}</button>`;
-  }).join("");
-  $("rail").querySelectorAll("button").forEach((button) => {
-    button.onclick = () => { state.index = Number(button.dataset.step); renderStep(); };
+function stopAutoplay() {
+  if (state.timer) {
+    clearInterval(state.timer);
+    state.timer = null;
+  }
+  state.playing = false;
+  syncPlaybackUi();
+}
+
+function intervalMs() {
+  return SPEEDS[state.speed] || SPEEDS[1];
+}
+
+function advanceTick() {
+  if (state.index >= state.steps.length - 1) {
+    stopAutoplay();
+    state.mode = "step";
+    syncPlaybackUi();
+    return;
+  }
+  state.index += 1;
+  renderStep();
+}
+
+function startAutoplay({ fromStart = false } = {}) {
+  stopAutoplay();
+  state.mode = "auto";
+  state.playing = true;
+  if (fromStart || state.index >= state.steps.length - 1) state.index = 0;
+  renderStep();
+  state.timer = setInterval(advanceTick, intervalMs());
+  syncPlaybackUi();
+}
+
+function setSpeed(speed) {
+  state.speed = Number(speed) || 1;
+  if (state.playing) {
+    if (state.timer) clearInterval(state.timer);
+    state.timer = setInterval(advanceTick, intervalMs());
+  }
+  syncPlaybackUi();
+}
+
+function goTo(index, { manual = false } = {}) {
+  const next = Math.max(0, Math.min(state.steps.length - 1, index));
+  if (manual && state.playing) stopAutoplay();
+  if (manual) state.mode = "step";
+  state.index = next;
+  renderStep();
+  syncPlaybackUi();
+}
+
+function syncPlaybackUi() {
+  const play = $("play");
+  if (play) {
+    play.setAttribute("aria-pressed", state.playing ? "true" : "false");
+    play.textContent = state.playing ? "Playing…" : "Autoplay full story";
+  }
+  document.querySelectorAll(".speed button").forEach((button) => {
+    button.setAttribute("aria-pressed", String(Number(button.dataset.speed) === state.speed));
   });
-  $("step-count").textContent = `Step ${state.index + 1} of ${state.steps.length}`;
+  document.querySelectorAll(".mode-group button[data-mode]").forEach((button) => {
+    button.setAttribute("aria-pressed", button.dataset.mode === state.mode ? "true" : "false");
+  });
+  const count = $("step-count");
+  if (!count) return;
+  const step = state.steps[state.index];
+  const title = step ? ((step.simple && step.simple.plain_code) || step.title) : "";
+  const modeLabel = state.playing ? "Auto" : "Step";
+  count.textContent = `${modeLabel} · Step ${state.index + 1} of ${state.steps.length}${title ? ` · ${title}` : ""}`;
+}
+
+function renderTimeline() {
+  const host = $("timeline");
+  if (!host) return;
+  host.innerHTML = state.steps.map((step, index) => {
+    const star = step.wow ? " ★" : "";
+    const current = index === state.index ? ' aria-current="true"' : "";
+    const kind = outcomeClass((step.simple && step.simple.outcome) || "");
+    const title = (step.simple && step.simple.plain_code) || step.title;
+    return `<button type="button" class="timeline-chip ${kind}" data-step="${index}"${current} title="${esc(step.id)} ${esc(title)}">${esc(step.id)}${star}</button>`;
+  }).join("");
+  host.querySelectorAll("button").forEach((button) => {
+    button.onclick = () => goTo(Number(button.dataset.step), { manual: true });
+  });
+  syncPlaybackUi();
+}
+
+function renderRail() {
+  renderTimeline();
 }
 
 function fieldsTable(items) {
@@ -223,7 +311,8 @@ function renderWorkflow(flow) {
       body = `<dl>${linesHtml(stage.lines)}</dl>`;
     }
     const arrow = index === 0 ? "" : '<div class="stage-arrow" aria-hidden="true">→</div>';
-    return `${arrow}<article class="stage"><h3><span class="n">${stage.n}</span> ${esc(stage.title)}</h3>${body}</article>`;
+    const tint = stage.key ? ` stage-${esc(stage.key)}` : "";
+    return `${arrow}<article class="stage${tint}"><h3><span class="n">${stage.n}</span> ${esc(stage.title)}</h3>${body}</article>`;
   }).join("");
   panel.innerHTML = `
     <div class="wf-head">
@@ -462,18 +551,33 @@ async function start() {
     }
   }
   showView(state.view);
-  $("back").onclick = () => { state.index = Math.max(0, state.index - 1); renderStep(); };
-  $("next").onclick = () => { state.index = Math.min(state.steps.length - 1, state.index + 1); renderStep(); };
+  syncPlaybackUi();
+  $("back").onclick = () => goTo(state.index - 1, { manual: true });
+  $("next").onclick = () => goTo(state.index + 1, { manual: true });
   $("play").onclick = () => {
-    if (state.timer) clearInterval(state.timer);
-    state.index = 0;
-    renderStep();
-    state.timer = setInterval(() => {
-      if (state.index >= state.steps.length - 1) { clearInterval(state.timer); return; }
-      state.index += 1;
-      renderStep();
-    }, 1600);
+    if (state.playing) {
+      stopAutoplay();
+      state.mode = "step";
+      syncPlaybackUi();
+      return;
+    }
+    startAutoplay({ fromStart: true });
   };
+  $("replay").onclick = () => startAutoplay({ fromStart: true });
+  $("reset").onclick = () => {
+    stopAutoplay();
+    state.mode = "step";
+    goTo(0, { manual: true });
+  };
+  $("mode-auto").onclick = () => startAutoplay();
+  $("mode-step").onclick = () => {
+    stopAutoplay();
+    state.mode = "step";
+    syncPlaybackUi();
+  };
+  document.querySelectorAll(".speed button").forEach((button) => {
+    button.onclick = () => setSpeed(button.dataset.speed);
+  });
   document.querySelectorAll("#filters button").forEach((button) => {
     button.onclick = () => loadQueue(button.dataset.filter);
   });
