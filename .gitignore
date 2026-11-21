@@ -1,0 +1,12 @@
+# Development data room and secrets. The scored system reads a data
+# directory at runtime and does not need these files in git.
+dev/
+*.xlsx
+.env
+*.key
+__pycache__/
+*.pyc
+.cache/
+.venv/
+system/.llm-cache/
+output/.llm-cache/
