@@ -549,18 +549,80 @@ th { color: var(--ink-soft); font-weight: 600; }
 .outcome-tile.kept { background: var(--accent-soft); color: var(--accent); }
 .outcome-tile.review { background: var(--wait-soft); color: var(--wait); }
 .outcome-tile span { color: inherit; }
-.outcome-tile .code {
-  display: block;
-  font-size: 0.7rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  opacity: 0.9;
+.outcome-tile .code-badge { display: inline-block; margin-top: 2px; }
+.outcome-tile .code-plain { display: block; margin-top: 2px; font-size: 0.75rem; }
+
+.code-badge {
+  display: inline-block;
+  margin: 1px 2px 1px 0;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  line-height: 1.45;
+  vertical-align: baseline;
+  white-space: nowrap;
 }
+.code-badge-cleared {
+  background: var(--done-soft);
+  color: var(--done);
+  border-color: color-mix(in srgb, var(--done) 28%, transparent);
+}
+.code-badge-kept {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+.code-badge-review {
+  background: var(--wait-soft);
+  color: var(--wait);
+  border-color: color-mix(in srgb, var(--wait) 28%, transparent);
+}
+.code-badge-reason {
+  background: #ece8f7;
+  color: #4b3a8c;
+  border-color: #c9bfd9;
+}
+:root[data-theme="dark"] .code-badge-reason {
+  background: #2a2438;
+  color: #cbb8f0;
+  border-color: #4a3f66;
+}
+.code-badge-customer {
+  background: var(--wait-soft);
+  color: var(--wait);
+  border-color: color-mix(in srgb, var(--wait) 28%, transparent);
+}
+.code-badge-id,
+.code-badge-neutral {
+  background: var(--accent-soft);
+  color: var(--ink);
+  border-color: var(--line);
+}
+.code-plain {
+  color: var(--ink-soft);
+  font-size: 0.85em;
+  font-weight: 500;
+}
+.code-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.filters .code-badge { margin-right: 2px; }
+.filters .code-plain { font-size: 0.78rem; }
+.queue button .code-badge { margin: 0 2px; }
 .glossary-group { margin: 0.6rem 0; }
 .glossary-group > strong { display: block; margin-bottom: 0.25rem; }
-.glossary-group ul { margin: 0.25rem 0 0.5rem 1rem; padding: 0; }
-.glossary-group li { margin: 0.2rem 0; }
+.glossary-group ul { margin: 0.25rem 0 0.5rem 1rem; padding: 0; list-style: none; }
+.glossary-group li { margin: 0.35rem 0; }
+.glossary-code { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
 
 .bar-wrap { margin: 0; }
 .bar {
