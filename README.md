@@ -32,9 +32,11 @@ Copy `.env.example` to `.env` and fill in the blanks. `system/run` loads `.env` 
 | Customer record, given the right decision | 100% |
 | Evidence set against the practice labels | 50 / 50 |
 | Repeat run | byte-identical, five times, with no API key |
-| All 819 hits | 458 cleared, 124 kept open, 237 left for review |
+| All 819 hits | 457 cleared, 124 kept open, 238 left for review |
 
 The decision score is the share of cost saved against sending every hit to review. Clearing a true `SAME_ENTITY` or `REVIEW` costs 60, so the engine clears only on an explicit SOP contradiction. A support note that names the hit's country blocks a location clear. A same-year month or day clash on an unverified customer date, a 1 January hit date, or a day/month swap is left for review.
+
+Names are normalised with Unicode NFKC, casefold, and diacritics removed, then a fixed Cyrillic, Greek, and Arabic transliteration. `name_variants.json` and a few built-in spellings (Mohammed/Muhammad, Yusuf/Youssef, Aleksandr/Alexander) apply. Particles and honorifics such as al-, bin, van, von, and Sheikh are not name parts. CJK is compared as written and is never romanised. A script match can confirm or block a clear. It cannot create one. `python3 system/test_normalize.py` checks the normaliser.
 
 ```mermaid
 flowchart LR

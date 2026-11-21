@@ -19,6 +19,8 @@ Customer resolution follows the link on the alert. Joint holders are picked with
 
 Hit dates come from `dobs`, otherwise an age in the first paragraph of the profile, otherwise a search result that names the same listing type and a country tied to the hit. Dated reports are only `According to …; Month D, YYYY:` lines.
 
+Names are compared after NFKC, casefold, and stripping diacritics. Cyrillic, Greek, and Arabic are transliterated with a fixed table; CJK is kept exactly and never romanised. A transliteration may confirm a person or stop a `NAME_MISMATCH` clear. It is not a reason to clear.
+
 The rules then clear on a contradiction (type, death, age under 16, date of birth, verified name, or location), confirm a person on name plus date of birth, or a company on name plus country, and leave everything else as `REVIEW`. A country clash does not clear a hit whose name and date already agree.
 
 Evidence is the ids of the records that decided the hit. Output order is `hit_id`. Sets are sorted before they affect a choice, so two runs write the same file.
