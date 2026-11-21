@@ -1,0 +1,5 @@
+#!/bin/sh
+# Deterministic sanctions identity resolver.
+# Usage: system/run <data_dir> <output_file>
+DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+exec python3 "$DIR/engine.py" "$@"
