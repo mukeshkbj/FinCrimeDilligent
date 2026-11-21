@@ -664,8 +664,8 @@ class Desk:
 
     def config(self):
         return {
-            "app_name": "Screening desk",
-            "outcome": "Clears false sanctions hits safely, and sends every doubtful one to a person, with a precise reason.",
+            "app_name": "Namesake",
+            "outcome": "Clears the strangers. Keeps the suspects. Shows the record.",
             "how": "It reads the customer file, the passport check and the list profile, then applies your rules.",
             "promises": [
                 "A bad decision is worse than no decision, so anything uncertain goes to review.",
