@@ -208,6 +208,53 @@ def birth_years(text):
     return sorted(years)
 
 
+def downgrade_clearance(profile_notes, reason):
+    """Object to a clearance. Never returns a decision to clear. None means keep the rules."""
+    text = profile_notes or ""
+    if endpoint() is None or not text.strip():
+        return None
+    parsed = complete_json(
+        "typed",
+        (
+            "You may only object to a clearance. Reply with JSON only: "
+            '{"object": false, "quote": "", "confidence": 0}. '
+            "Set object true only when the profile contradicts the clearance. "
+            "quote must be copied verbatim from the profile. If unsure, object false."
+        ),
+        json.dumps({"profile": text[:2000], "clearance_reason": (reason or "")[:500]}, ensure_ascii=False),
+    )
+    if not parsed or not parsed.get("object"):
+        return None
+    confidence = _confidence(parsed)
+    quote = parsed.get("quote") or ""
+    if confidence is None or confidence < CLEAR_CONFIDENCE or not quote or quote not in text:
+        return None
+    return {"quote": quote}
+
+
+def search_about(snippet, listing_phrase):
+    """Whether a snippet is about this hit. The quote must occur verbatim in the snippet."""
+    text = snippet or ""
+    if endpoint() is None or not text.strip():
+        return None
+    parsed = complete_json(
+        "typed",
+        (
+            "Decide if the snippet is about this listing. Reply with JSON only: "
+            '{"about": false, "quote": "", "confidence": 0}. '
+            "quote must be copied verbatim from the snippet. If unsure, about false."
+        ),
+        json.dumps({"snippet": text[:1500], "listing_phrase": listing_phrase}, ensure_ascii=False),
+    )
+    if not parsed:
+        return None
+    confidence = _confidence(parsed)
+    quote = parsed.get("quote") or ""
+    if confidence is None or confidence < CLEAR_CONFIDENCE or not quote or quote not in text:
+        return None
+    return {"about": bool(parsed.get("about")), "quote": quote}
+
+
 def polish_reason(reason, decision, reason_code, hit_name):
     """Rephrase a finished reason. Never changes the decision. Off unless asked."""
     if os.environ.get("RESOLVE_POLISH_REASONS", "").strip() != "1":

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Screening desk</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="top-row">
+      <div>
+        <p class="kicker" id="app-name">Screening desk</p>
+        <h1 id="outcome"></h1>
+        <p class="how" id="how"></p>
+      </div>
+      <div class="top-tools">
+        <span class="badge" id="mode-badge">Practice file</span>
+        <div class="theme" role="group" aria-label="Theme">
+          <button type="button" data-theme="light">Light</button>
+          <button type="button" data-theme="system">System</button>
+          <button type="button" data-theme="dark">Dark</button>
+        </div>
+      </div>
+    </div>
+    <ul class="promises" id="promises"></ul>
+    <p class="read" id="how-to-read"></p>
+    <details class="glossary">
+      <summary>Words on this screen</summary>
+      <ul>
+        <li><strong>Sanctions.</strong> Government lists of people, companies and countries it is illegal to deal with.</li>
+        <li><strong>PEP.</strong> Politically exposed person, a public official or family member, higher corruption risk.</li>
+        <li><strong>Screening hit.</strong> A name on a list that looks like one of our customers.</li>
+        <li><strong>SAME_ENTITY.</strong> The evidence shows this list profile is the customer.</li>
+        <li><strong>DIFFERENT_ENTITY.</strong> The evidence shows this list profile is not the customer, so the hit is cleared.</li>
+        <li><strong>REVIEW.</strong> Sent to a person because we're not sure.</li>
+        <li><strong>SAR.</strong> Suspicious Activity Report filed with the UK National Crime Agency; a confirmed match may lead to one.</li>
+      </ul>
+    </details>
+  </header>
+
+  <p class="banner" id="banner"></p>
+  <p class="ticker" id="ticker" aria-live="polite">Loading the recorded file…</p>
+
+  <section class="kpis" id="kpis" aria-label="Run totals"></section>
+
+  <div class="bar-wrap">
+    <p class="bar-label">Where the 819 hits went</p>
+    <div class="bar" id="bar" role="img" aria-label="Decision totals"></div>
+  </div>
+
+  <div class="tabs" role="tablist">
+    <button type="button" role="tab" id="tab-simple" aria-controls="panel-simple" aria-selected="true">Simple</button>
+    <button type="button" role="tab" id="tab-detailed" aria-controls="panel-detailed" aria-selected="false">Detailed</button>
+  </div>
+
+  <div class="story-bar">
+    <div class="rail" id="rail" role="tablist" aria-label="Story steps"></div>
+    <div class="rail-actions">
+      <button type="button" id="back">Back</button>
+      <button type="button" id="next" class="primary">Next step</button>
+      <button type="button" id="play" class="demo">Demo: play the story</button>
+      <span id="step-count"></span>
+    </div>
+  </div>
+
+  <div class="layout">
+    <div class="main">
+      <div id="panel-simple" role="tabpanel" aria-labelledby="tab-simple"></div>
+      <div id="panel-detailed" role="tabpanel" aria-labelledby="tab-detailed" hidden></div>
+    </div>
+    <aside>
+      <h2>This story</h2>
+      <p id="summary-line"></p>
+      <ol id="check-list"></ol>
+      <p class="real-line" id="real-line"></p>
+    </aside>
+  </div>
+
+  <section class="queue-wrap">
+    <h2>Queue</h2>
+    <div class="rail-actions" id="filters">
+      <button type="button" data-filter="review" class="primary">Left for you</button>
+      <button type="button" data-filter="review_name_dob">Left for you, name and date agree</button>
+      <button type="button" data-filter="cleared">Cleared</button>
+      <button type="button" data-filter="kept">Kept open</button>
+    </div>
+    <div class="queue" id="queue"></div>
+  </section>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

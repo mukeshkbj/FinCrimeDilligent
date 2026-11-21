@@ -9,6 +9,7 @@ Read [PRINCIPLES.md](PRINCIPLES.md) before changing the rules. Agents should als
 ```bash
 system/run <data_dir> <output_file>
 python3 validate.py --data <data_dir> --output <output_file> --score <data_dir>/practice_labels.jsonl
+python3 ui/serve.py <data_dir> <output_file>
 ```
 
 `data_dir` is the official room (`alerts.jsonl`, `hits.jsonl`, `customers.jsonl`, `accounts.jsonl`, `onboarding.jsonl`, `kyc_checks.jsonl`, `notes.jsonl`, `search_results.jsonl`, `name_variants.json`). The committed predictions are `output/dev.jsonl`. Do not commit `dev/` or API keys.
