@@ -1191,7 +1191,13 @@ def gather_hit_dobs(store, hit, hit_countries, is_company):
         return parsed, "field", phrase, []
     if is_company:
         return [], "none", "", []
-    years = ages_in_text(first_paragraph(hit.get("profile_notes")))
+    paragraph = first_paragraph(hit.get("profile_notes"))
+    years = ages_in_text(paragraph)
+    if not years:
+        # Only an age wording the rules missed is sent to Jev or, on the xAI
+        # API, to Grok as the same typed question. No key, a low confidence,
+        # or an error leaves years empty and the rules continue.
+        years = _model_birth_years(paragraph) or []
     if years:
         dates = [Date(year) for year in years]
         phrase = f"{dates[0].y} or {dates[1].y}" if len(dates) == 2 else ", ".join(str(item.y) for item in dates)
@@ -1201,17 +1207,28 @@ def gather_hit_dobs(store, hit, hit_countries, is_company):
     phrase_role = role_phrase(hit)
     matched = []
     years = []
-    query = search_key(hit.get("name") or "")
-    for result in store.search_by_query.get(query, []):
-        blob = f"{result.get('title') or ''} {result.get('snippet') or ''}"
-        if phrase_role not in blob.lower():
-            continue
-        if not any(country_in_text(blob, country) for country in hit_countries):
-            continue
-        matched.append(result["result_id"])
-        for year in ages_in_text(result.get("snippet") or ""):
-            if year not in years:
-                years.append(year)
+    seen_results = set()
+    queries = []
+    for name in hit_name_list(hit):
+        key = search_key(name)
+        if key and key not in queries:
+            queries.append(key)
+    for query in queries:
+        for result in store.search_by_query.get(query, []):
+            if result["result_id"] in seen_results:
+                continue
+            seen_results.add(result["result_id"])
+            blob = f"{result.get('title') or ''} {result.get('snippet') or ''}"
+            if phrase_role not in blob.lower():
+                continue
+            if not any(country_in_text(blob, country) for country in hit_countries):
+                continue
+            matched.append(result["result_id"])
+            snippet = result.get("snippet") or ""
+            snippet_years = ages_in_text(snippet) or _model_birth_years(snippet) or []
+            for year in snippet_years:
+                if year not in years:
+                    years.append(year)
     if not years:
         return [], "none", "", []
     dates = [Date(year) for year in sorted(years)]
@@ -1412,7 +1429,9 @@ def decide_person(store, alert, hit, seed, group, screened):
 
     death = parse_date(hit.get("deceased_date"))
     screened_on = parse_date(alert.get("screened_at"))
+    # A deceased flag with no date is not a clearance. A dated death before screening is.
     deceased = definitely_before(death, screened_on)
+    undated_death = str(hit.get("life_status") or "").lower() == "deceased" and death is None
 
     type_mismatch = (
         customer_company is not None and hit_company is not None and customer_company != hit_company
@@ -1460,11 +1479,19 @@ def decide_person(store, alert, hit, seed, group, screened):
         decision = "REVIEW"
         code = "INSUFFICIENT_DATA"
 
+    # A profile marked deceased without a date cannot be confirmed. A separate
+    # contradiction can still clear it.
+    if undated_death and decision == "SAME_ENTITY":
+        decision = "REVIEW"
+        code = "INSUFFICIENT_DATA"
+        blocked_review = False
+
     reason = build_reason(
         decision=decision,
         code=code,
         applicable=applicable,
         blocked_review=blocked_review,
+        undated_death=undated_death,
         hit=hit,
         customer_dob=customer_dob,
         dob_source=dob_source,
@@ -1513,6 +1540,7 @@ def build_reason(
     code,
     applicable,
     blocked_review,
+    undated_death,
     hit,
     customer_dob,
     dob_source,
@@ -1537,6 +1565,20 @@ def build_reason(
     cust_places = join_countries(customer_countries)
     hit_places = join_countries(hit_countries)
     shared = join_countries(overlap)
+    if undated_death and decision == "REVIEW" and not applicable and not blocked_review:
+        if name_agree and dob_bit and dob_phrase:
+            agreed = f"The customer's name agrees with the hit's name {hit_name}, and the date of birth {dob_bit} agrees with the hit's {dob_phrase}."
+        elif name_agree:
+            agreed = f"The customer's name agrees with the hit's name {hit_name}."
+        else:
+            agreed = f"The hit name is {hit_name}."
+        return " ".join(
+            [
+                sentence(f"The profile marks {hit_name} as deceased but gives no date of death"),
+                agreed,
+                sentence("Without a date of death the hit can be neither cleared as deceased nor confirmed, so it is left for review"),
+            ]
+        )
 
     if decision == "SAME_ENTITY" and code == "NAME_LOCATION_MATCH":
         return " ".join(
@@ -1780,6 +1822,33 @@ def combine(alert, hit, outcomes):
     }
 
 
+def _model_birth_years(text):
+    if not text:
+        return None
+    try:
+        import llm
+    except ImportError:
+        return None
+    try:
+        return llm.birth_years(text)
+    except Exception:
+        return None
+
+
+def _maybe_polish(row, hit):
+    try:
+        import llm
+    except ImportError:
+        return row
+    try:
+        polished = llm.polish_reason(row.get("reason"), row.get("decision"), row.get("reason_code"), hit.get("name"))
+    except Exception:
+        return row
+    if polished:
+        row["reason"] = polished
+    return row
+
+
 def resolve_hit(store, hit):
     alert = store.alerts.get(hit["alert_id"])
     if alert is None:
@@ -1788,7 +1857,7 @@ def resolve_hit(store, hit):
     seeds = resolve_seeds(store, alert, screened)
     groups = person_groups(store, seeds)
     outcomes = [decide_person(store, alert, hit, seed, group, screened) for seed, group in groups]
-    return combine(alert, hit, outcomes)
+    return _maybe_polish(combine(alert, hit, outcomes), hit)
 
 
 def run(data_dir, output_path):

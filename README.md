@@ -13,7 +13,7 @@ python3 validate.py --data <data_dir> --output <output_file> --score <data_dir>/
 
 `data_dir` is the official room (`alerts.jsonl`, `hits.jsonl`, `customers.jsonl`, `accounts.jsonl`, `onboarding.jsonl`, `kyc_checks.jsonl`, `notes.jsonl`, `search_results.jsonl`, `name_variants.json`). The committed predictions are `output/dev.jsonl`. Do not commit `dev/` or API keys.
 
-Python 3 standard library only. No model is required. A full development run is about 4 seconds.
+Python 3 standard library only. No model is required. A full development run is about 4 seconds. If a key is present, `OPENROUTER_API_KEY` is used first and `XAI_API_KEY` otherwise; neither key is read from the repo, and a missing key or an error stays on the rules.
 
 ## Practice score
 
