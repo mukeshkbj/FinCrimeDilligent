@@ -12,3 +12,5 @@ __pycache__/
 .venv/
 system/.llm-cache/
 output/.llm-cache/
+*.jev.jsonl
+ui/analyst_labels.jsonl
