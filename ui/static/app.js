@@ -124,6 +124,10 @@ function renderGlossary(labels) {
     ["PEP", "Politically exposed person — a public official or family member, higher corruption risk."],
     ["Screening hit", "A watchlist profile whose name looks like one of our customers."],
     ["Alert", "One customer's hits grouped together."],
+    ["J/E/V", "Judge / Evaluate / Verify — three checks on every hit. Pass means they agreed; downgraded means a clearance or confirm was pulled back to REVIEW."],
+    ["Judge", "The rules decision (SAME_ENTITY, DIFFERENT_ENTITY, or REVIEW)."],
+    ["Evaluate", "An independent re-check of name agreement and date comparison."],
+    ["Verify", "Checks that the reason code fits the decision and every cited id exists in the files."],
     ["SAR", "Suspicious Activity Report filed with the UK National Crime Agency; a confirmed match may lead to one."],
   ];
   const mapFor = { Decisions: "decisions", "Reason codes": "reason_codes", "Customer record": "customer" };
@@ -284,11 +288,19 @@ function renderSummary(summary) {
   $("kpis").innerHTML = tiles.map(([label, value]) => `<div class="kpi"><span>${label}</span><strong>${value}</strong></div>`).join("");
   const total = (summary.bar || []).reduce((sum, part) => sum + part.count, 0) || 1;
   const classes = ["seg-cleared", "seg-kept", "seg-review"];
+  const decisions = ["DIFFERENT_ENTITY", "SAME_ENTITY", "REVIEW"];
   $("bar").innerHTML = (summary.bar || []).map((part, index) => {
     const width = Math.max(2, Math.round(100 * part.count / total));
-    const label = width > 12 ? `${part.name} ${part.count}` : "";
-    return `<i class="${classes[index] || ""}" style="width:${width}%">${label}</i>`;
+    const title = `${part.name} · ${part.count}`;
+    return `<i class="${classes[index] || ""}" style="width:${width}%" title="${esc(title)}" aria-label="${esc(title)}"></i>`;
   }).join("");
+  const legend = $("bar-legend");
+  if (legend) {
+    legend.innerHTML = (summary.bar || []).map((part, index) => {
+      const code = decisions[index] || part.name;
+      return `<li class="bar-legend-item ${classes[index] || ""}"><span class="bar-swatch" aria-hidden="true"></span><span class="bar-legend-label">${decisionBadge(code)}</span><strong class="bar-legend-count">${esc(part.count)}</strong></li>`;
+    }).join("");
+  }
 }
 
 function stopAutoplay() {
@@ -587,7 +599,9 @@ function showView(name) {
 async function loadQueue(filter) {
   const body = await getJSON("/api/queue?filter=" + encodeURIComponent(filter));
   $("queue").innerHTML = body.hits.map((hit) => {
-    const jevBit = hit.jev ? ` · J/E/V ${esc(hit.jev)}` : "";
+    const jevBit = hit.jev
+      ? ` <span class="code-badge code-badge-jev" title="Judge / Evaluate / Verify">${esc("J/E/V")} <span class="code-plain">${esc(hit.jev)}</span></span>`
+      : "";
     return `<button type="button" data-hit="${esc(hit.hit_id)}"><span class="code-badge code-badge-id">${esc(hit.hit_id)}</span> ${esc(hit.name || "")} ${decisionBadge(hit.decision)} ${reasonBadge(hit.reason_code)}${jevBit}</button>`;
   }).join("") || "<p>None in this filter.</p>";
   $("queue").setAttribute("aria-label", `${body.count} hits in this filter`);
