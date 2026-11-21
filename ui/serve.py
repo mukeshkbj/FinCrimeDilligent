@@ -172,6 +172,8 @@ class Desk:
         if accounts_path.is_file():
             for row in read_jsonl(accounts_path):
                 self.accounts.setdefault(row["account_id"], []).append(row["customer_id"])
+        jev_path = Path(str(output_path)[:-6] + ".jev.jsonl") if str(output_path).endswith(".jsonl") else Path(str(output_path) + ".jev.jsonl")
+        self.jev = index_jsonl(jev_path, "hit_id") if jev_path.is_file() else {}
         self.labels_out = ROOT / "ui" / "analyst_labels.jsonl"
         digest = hashlib.sha256(output_path.read_bytes()).hexdigest()[:12]
         self.run_id = "recorded-" + digest
@@ -344,6 +346,10 @@ class Desk:
             },
             "detailed": {
                 "mode": "REAL",
+                "model_used": False,
+                "model_note": "This output file has no model field. The page did not call one.",
+                "confidence": None,
+                "confidence_note": "The rules file does not record a confidence number.",
                 "decision": decision,
                 "reason_code": code,
                 "customer_record_id": customer,
@@ -371,6 +377,7 @@ class Desk:
                 "why": self.why(spec["hit_id"]),
                 "brief": self.brief(spec["hit_id"]),
                 "trail": self.trail(spec["hit_id"]),
+                "jev": self.jev.get(spec["hit_id"]),
                 "workflow": workflow.build(self, spec["hit_id"], _display_name),
             },
         }
@@ -437,7 +444,8 @@ class Desk:
             settle = "A date of birth on the list profile, or an identity note that states one."
         else:
             settle = "One more fact that either contradicts the list profile or agrees on name and date."
-        return {"missing": missing, "would_settle": settle}
+        log = self.jev.get(hit_id) or {}
+        return {"missing": missing, "would_settle": settle, "name_agree": log.get("name_agree"), "dob_agree": log.get("dob_agree")}
 
     def why(self, hit_id):
         row = self.output.get(hit_id)
@@ -455,6 +463,7 @@ class Desk:
     def queue(self, kind):
         rows = []
         for hit_id, row in self.output.items():
+            log = self.jev.get(hit_id) or {}
             if kind == "review" and row["decision"] != "REVIEW":
                 continue
             if kind == "cleared" and row["decision"] != "DIFFERENT_ENTITY":
@@ -462,11 +471,7 @@ class Desk:
             if kind == "kept" and row["decision"] != "SAME_ENTITY":
                 continue
             if kind == "review_name_dob":
-                if row["decision"] != "REVIEW":
-                    continue
-                reason = row.get("reason") or ""
-                code = row.get("reason_code") or ""
-                if workflow._name_mark(reason, code) != "matches" or workflow._dob_mark(reason, code, "set", "set") != "matches":
+                if row["decision"] != "REVIEW" or not (log.get("name_agree") and log.get("dob_agree")):
                     continue
             hit = self.hits.get(hit_id, {})
             rows.append({
@@ -476,6 +481,7 @@ class Desk:
                 "decision": row["decision"],
                 "reason_code": row["reason_code"],
                 "customer_record_id": row.get("customer_record_id"),
+                "jev": "downgraded" if log.get("downgraded") else ("pass" if log else "not logged"),
             })
         rows.sort(key=lambda item: item["hit_id"])
         return {"filter": kind, "count": len(rows), "hits": rows[:80]}
@@ -511,6 +517,7 @@ class Desk:
             "modes": {
                 "decisions": "REAL",
                 "records": "REAL",
+                "model": "not used",
             },
             "practice_banner": "Practice file. These people are invented. Nothing is sent to a customer.",
         }
@@ -557,6 +564,7 @@ class Handler(BaseHTTPRequestHandler):
                 "why": DESK.why(hit_id),
                 "brief": DESK.brief(hit_id),
                 "trail": DESK.trail(hit_id),
+                "jev": DESK.jev.get(hit_id),
                 "workflow": workflow.build(DESK, hit_id, _display_name),
             })
         if path in ("/", "/index.html"):

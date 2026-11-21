@@ -188,6 +188,10 @@ function renderStep() {
       <p class="meta">${simple.screened_name || ""} was screened against ${simple.hit_name || "the list name"}.</p>
       <p class="checked ${simple.passed ? "" : "fail"}">${simple.checked}</p>
     </article>`;
+  const jev = detailed.jev || {};
+  const jevLine = jev.judge
+    ? `Judge ${jev.judge.decision} / ${jev.judge.reason_code}. Evaluate ${jev.evaluate.agrees ? "agrees" : "disagrees"}. Verify ${jev.verify.ok ? "ok" : "failed"}. ${jev.downgraded ? "Downgraded to review." : "Not downgraded."}`
+    : "J/E/V log is not beside this output file.";
   const trail = (detailed.trail || []).map((hop) => `<div class="hop"><strong>${hop.hop}.</strong> ${hop.detail}</div>`).join("");
   const brief = detailed.brief;
   const briefHtml = brief
@@ -197,12 +201,13 @@ function renderStep() {
     <article class="card now">
       <p class="card-kicker">${step.id} · ${step.title}</p>
       <h2>${detailed.decision || ""} · ${detailed.reason_code || ""}</h2>
-      <p><span class="tag real">REAL</span><span class="tag real">rules</span></p>
+      <p><span class="tag real">REAL</span><span class="tag real">rules</span><span class="tag gap">no confidence number in the file</span></p>
       <section class="panel"><h3>Inputs</h3><p>Hit ${detailed.hit_id} · alert ${detailed.alert_id} · customer ${detailed.customer_record_id}</p>
         <p>Screened ${detailed.screened && detailed.screened.name} · list name ${detailed.hit && detailed.hit.name}</p></section>
       <section class="panel"><h3>Why this result</h3><p>${detailed.why ? detailed.why.answer : ""}</p><p class="meta">${detailed.why ? detailed.why.from : ""}</p>${fieldsTable(detailed.why && detailed.why.evidence)}</section>
       <section class="panel"><h3>Review brief</h3>${briefHtml}</section>
       <section class="panel"><h3>Evidence trail</h3>${trail || "<p>No hops recorded.</p>"}</section>
+      <section class="panel"><h3>Judge, evaluate, verify</h3><p>${jevLine}</p><p class="meta">${detailed.model_note || ""} ${detailed.confidence_note || ""}</p></section>
       <section class="panel"><h3>Demo note</h3>
         <p>Demo: this writes a local label only. The scored file is not changed.</p>
         <button type="button" id="override" class="demo">Demo: leave this for a person</button>
@@ -238,7 +243,7 @@ function showView(name) {
 async function loadQueue(filter) {
   const body = await getJSON("/api/queue?filter=" + encodeURIComponent(filter));
   $("queue").innerHTML = body.hits.map((hit) =>
-    `<button type="button" data-hit="${hit.hit_id}">${hit.hit_id} · ${hit.name || ""} · ${hit.decision} · ${hit.reason_code}</button>`
+    `<button type="button" data-hit="${hit.hit_id}">${hit.hit_id} · ${hit.name || ""} · ${hit.decision} · ${hit.reason_code} · J/E/V ${hit.jev}</button>`
   ).join("") || "<p>None in this filter.</p>";
   $("queue").setAttribute("aria-label", `${body.count} hits in this filter`);
 }
@@ -271,6 +276,9 @@ async function openHit(hitId) {
       why: body.why,
       brief: body.brief,
       trail: body.trail,
+      jev: body.jev,
+      model_note: "Model was not used to build this file.",
+      confidence_note: "No confidence number is stored.",
       workflow: body.workflow,
       hit: { name: (body.workflow && body.workflow.list_name) || "" },
       screened: { name: "" },
@@ -301,7 +309,7 @@ async function start() {
   $("how-to-read").textContent = config.how_to_read;
   $("banner").textContent = config.practice_banner;
   $("promises").innerHTML = (config.promises || []).map((line) => `<li>${line}</li>`).join("");
-  $("real-line").textContent = "Decisions: real recorded file. Records: real.";
+  $("real-line").textContent = "Decisions: real recorded file. Records: real. Model: not used.";
   const summary = await getJSON("/api/summary");
   renderSummary(summary);
   const journey = await getJSON("/api/journey");
