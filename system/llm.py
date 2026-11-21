@@ -66,6 +66,14 @@ def endpoint() -> dict | None:
     dotenv.load_dotenv()
     model_override = os.environ.get("GROK_MODEL", "").strip()
     openrouter = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if openrouter.startswith("xai-"):
+        # The brief allows a Grok API key in OPENROUTER_API_KEY: send it to xAI, not OpenRouter.
+        return {
+            "base": "https://api.x.ai/v1",
+            "key": openrouter,
+            "provider": "xai",
+            "model": os.environ.get("XAI_MODEL", "").strip() or PINNED_XAI_MODEL,
+        }
     if openrouter:
         return {
             "base": "https://openrouter.ai/api/v1",
@@ -224,7 +232,9 @@ def polish_reason(reason: str | None, decision: str | None, reason_code: str | N
 
     Returns None, so the caller keeps the template, unless every check passes.
     """
-    if os.environ.get("RESOLVE_POLISH_REASONS", "").strip() == "0":
+    # Off unless asked for: the scored file stays the template wording, so every
+    # run (with or without a key) writes the same file as output/dev.jsonl.
+    if os.environ.get("RESOLVE_POLISH_REASONS", "").strip() != "1":
         return None
     if not reason or endpoint() is None:
         return None

@@ -1,6 +1,6 @@
 # Identity resolver
 
-Deterministic SOP engine for watchlist hits. Decisions are deterministic rules only; no model decides. Grok writes the reason wording, checked against the record. See `PRINCIPLES.md`.
+Deterministic SOP engine for watchlist hits. Decisions, reason codes, evidence and reasons are written by rules in code; no model is called in the scored run. See `PRINCIPLES.md`.
 
 ## Architecture
 
@@ -32,7 +32,24 @@ system/run dev output/dev.jsonl
 python3 validate.py --data dev --output output/dev.jsonl --score dev/practice_labels.jsonl
 ```
 
-Python 3 standard library only. A development run of 819 hits takes about 4 seconds. Decisions are deterministic rules only; no model decides. Grok writes the reason wording, checked against the record. The run does not use the network.
+Python 3 standard library only. A development run of 819 hits takes about 4–7 seconds on a laptop. The scored run makes no network calls, so it costs $0 and writes the same file every time, with or without an API key set.
+
+## Model and prompts
+
+No model takes part in the scored run. Every decision, code, evidence list and reason comes from the rules, so five runs give byte-identical files.
+
+Grok is optional and has two uses, both off the decision path:
+
+- **Analyst memo draft (the desk, `ui/serve.py`).** For a `REVIEW` hit the engine writes a memo: what agrees, what contradicts, what is missing, the one document that would settle it, and the search results rejected as namesakes. "Draft wording" sends that memo to Grok (`grok-4.20-0309-non-reasoning` via the xAI API, or `x-ai/grok-4.3` via OpenRouter), temperature 0, with the prompt: *"Rewrite the analyst memo in clear English for a compliance analyst. Keep every record id, date and number exactly as given. Do not add facts. 2 to 4 short paragraphs."* A draft that adds any record id, date or number not in the memo is rejected and the memo is shown unchanged.
+- **Reason rewording (`system/llm.py`), off by default.** With `RESOLVE_POLISH_REASONS=1` and a key, Grok may reword reasons under the same no-new-facts check, a confidence gate of 60/63 and a cap of 120 calls or 10 minutes. In our test with `grok-4.20` it accepted 0 of 120 rewrites, so we leave it off. A key in `OPENROUTER_API_KEY` that starts with `xai-` is sent to the xAI API.
+
+## Time and cost
+
+| Run | Time | Cost |
+|---|---|---|
+| Scored run, 819 dev hits, any key setting | 4–7 s | $0 (no calls) |
+| Unseen set, about 550 hits (estimate) | under 10 s | $0 |
+| Optional reason rewording, 120 calls | about 2.5 min with `grok-4.20` non-reasoning | a few cents |
 
 ## Three cases
 
