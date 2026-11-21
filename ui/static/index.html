@@ -79,6 +79,7 @@
       <div class="bar-wrap">
         <p class="section-label">Where the hits went</p>
         <div class="bar" id="bar" role="img" aria-label="Decision totals"></div>
+        <ul class="bar-legend" id="bar-legend" aria-label="Decision legend"></ul>
       </div>
     </div>
     <section class="kpis" id="kpis" aria-label="Run totals"></section>
@@ -97,7 +98,7 @@
       <p class="read" id="how-to-read"></p>
       <p class="banner" id="banner"></p>
       <ul class="promises" id="promises"></ul>
-      <details class="glossary">
+      <details class="glossary" open>
         <summary>Words on this screen</summary>
         <ul id="glossary-list">
           <li><strong>Sanctions.</strong> Government lists of people, companies and countries it is illegal to deal with.</li>
@@ -106,11 +107,26 @@
           <li><strong>SAME_ENTITY.</strong> Same person (sent to compliance).</li>
           <li><strong>DIFFERENT_ENTITY.</strong> Different person or company (cleared).</li>
           <li><strong>REVIEW.</strong> Needs a person.</li>
+          <li><strong>J/E/V.</strong> Judge / Evaluate / Verify — three checks on every hit. Pass means they agreed; downgraded means a clearance or confirm was pulled back to REVIEW.</li>
+          <li><strong>Judge.</strong> The rules decision (SAME_ENTITY, DIFFERENT_ENTITY, or REVIEW).</li>
+          <li><strong>Evaluate.</strong> An independent re-check of name agreement and date comparison.</li>
+          <li><strong>Verify.</strong> Checks that the reason code fits the decision and every cited id exists in the files.</li>
           <li><strong>SAR.</strong> Suspicious Activity Report filed with the UK National Crime Agency; a confirmed match may lead to one.</li>
         </ul>
       </details>
     </div>
   </details>
+
+  <section class="key-terms" aria-label="Key terms">
+    <p class="section-label">Key terms</p>
+    <ul class="key-terms-list" id="key-terms">
+      <li><strong>DIFFERENT_ENTITY</strong> — different person or company (cleared)</li>
+      <li><strong>SAME_ENTITY</strong> — same person (sent to compliance)</li>
+      <li><strong>REVIEW</strong> — needs a person</li>
+      <li><strong>J/E/V</strong> — Judge / Evaluate / Verify. Pass = checks agreed; downgraded = pulled back to REVIEW</li>
+      <li><strong>SAR</strong> — Suspicious Activity Report (UK National Crime Agency)</li>
+    </ul>
+  </section>
 
   <section class="queue-wrap">
     <div class="queue-head">
