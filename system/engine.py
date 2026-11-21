@@ -1782,6 +1782,10 @@ def decide_person(store, alert, hit, seed, group, screened):
         dob_verified=dob_verified,
         dob_risky=dob_risky,
         script_note=script_note if (applied_agree or applied_uncertain) else "",
+        script_blocked=applied_uncertain,
+        store=store,
+        facts=facts,
+        search_ids=search_ids if dob_origin == "search" else [],
     )
     evidence = build_evidence(
         decision=decision,
@@ -1823,6 +1827,176 @@ def decide_person(store, alert, hit, seed, group, screened):
     }
 
 
+_ID_RE = re.compile(r"\b(?:H|CUS|KYC|NOTE|SR|A|ACC|APP)-[0-9A-Za-z]+\b")
+
+
+def cited_ids(reason):
+    """IDs written in the reason, in a stable order. Evidence is this list."""
+    found = []
+    for item in _ID_RE.findall(reason or ""):
+        if item not in found:
+            found.append(item)
+    return sorted(found)
+
+
+def _approval_date(facts, source_id):
+    if not facts or not source_id:
+        return ""
+    for item in facts.get("candidates") or []:
+        if item.get("id") == source_id:
+            when = str(item.get("when") or "")[:10]
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", when):
+                return when
+    return ""
+
+
+def _plain(value):
+    """Drop abbreviation dots so 'L.P.' is not counted as extra sentences."""
+    return re.sub(r"\.(?=[A-Za-z]|\s|$)", "", str(value))
+
+
+def _person_value(value, source_id, facts, field):
+    """Quote a customer fact with the record that holds it. Never invent a date."""
+    shown = _plain(value) if value not in (None, "") else "not on the customer record"
+    if source_id and str(source_id).startswith(("KYC-", "NOTE-")):
+        when = _approval_date(facts, source_id)
+        if when:
+            return f"{shown} ({source_id}, approved {when})"
+        return f"{shown} ({source_id}, no approval date)"
+    if source_id and str(source_id).startswith("CUS-"):
+        return f"{shown} ({source_id} {field}; no approved check)"
+    if source_id:
+        return f"{shown} ({source_id} {field})"
+    return f"{shown} (no approved check)"
+
+
+def _hit_value(value, hit_id, field):
+    if value in (None, "", []):
+        return f"not on the list entry ({hit_id} {field})"
+    return f"{_plain(value)} ({hit_id} {field})"
+
+
+def _sentences(text):
+    """Split on sentence ends. Periods inside L.P. or S.A. stay put."""
+    parts = []
+    buf = ""
+    index = 0
+    while index < len(text):
+        if (
+            text[index] == "."
+            and index + 2 < len(text)
+            and text[index + 1] == " "
+            and text[index + 2].isupper()
+        ):
+            previous = buf.rstrip().split(" ")[-1] if buf.strip() else ""
+            if "." not in previous:
+                parts.append((buf + ".").strip())
+                buf = ""
+                index += 2
+                continue
+        buf += text[index]
+        index += 1
+    if buf.strip():
+        parts.append(buf.strip())
+    return parts
+
+
+def _clip_reason(text):
+    text = re.sub(r"\s+", " ", text or "").strip()
+    if text and text[-1] not in ".!?":
+        text += "."
+    parts = _sentences(text)
+    kept = []
+    for part in parts:
+        trial = " ".join(kept + [part])
+        if len(trial) <= 300:
+            kept.append(part)
+        else:
+            break
+    text = " ".join(kept) if kept else text
+    if len(text) > 300:
+        cut = text[:299].rstrip(" ,;")
+        text = cut + "."
+    return text
+
+
+def _country_field(hit):
+    if hit.get("countries"):
+        return "countries"
+    if hit.get("nationality"):
+        return "nationality"
+    if hit.get("citizenship"):
+        return "citizenship"
+    if hit.get("addresses") or hit.get("place_of_birth"):
+        return "addresses"
+    return "countries"
+
+
+def _short_places(countries, limit=3):
+    names = sorted(countries or [])
+    if not names:
+        return "none"
+    if len(names) <= limit:
+        return ", ".join(names)
+    return ", ".join(names[:limit]) + " +" + str(len(names) - limit)
+
+
+def _customer_countries_cite(store, seed, countries, facts):
+    customer = (store.customers.get(seed) if store and seed else None) or {}
+    fields = []
+    for field in ("residence_country", "nationality"):
+        if canon_field(customer.get(field)) in (countries or set()):
+            fields.append(field)
+    if fields:
+        return f"{_short_places(countries)} ({seed} {'/'.join(fields)})"
+    if facts and facts.get("country_source") and facts.get("country"):
+        return _person_value(facts["country"], facts["country_source"], facts, "document_country")
+    if seed:
+        return f"{_short_places(countries)} ({seed} residence_country)"
+    return _short_places(countries)
+
+
+def _hit_dob_cite(hit, origin, phrase, search_ids):
+    hit_id = hit.get("hit_id")
+    if origin == "field":
+        raw = [str(item) for item in (hit.get("dobs") or []) if item]
+        shown = ", ".join(raw[:3]) + ("…" if len(raw) > 3 else "")
+        return _hit_value(shown or None, hit_id, "dobs")
+    if origin == "notes":
+        return _hit_value(phrase, hit_id, "profile_notes")
+    if origin == "search" and search_ids:
+        return f"{phrase} ({search_ids[0]} snippet)"
+    return _hit_value(None, hit_id, "dobs")
+
+
+def _alias_transliteration(hit, compare_name=""):
+    hit_id = hit.get("hit_id")
+    words = re.findall(r"[^\W\d_]+", compare_name or "", flags=re.UNICODE)
+    folded_words = []
+    for word in words:
+        folded = "".join(ch for ch in normalize.fold_name(word) if ch.isalpha())
+        folded_words.append((folded, word))
+    for alias in hit.get("aliases") or []:
+        scripts = normalize.scripts_in(alias) & {"Arabic", "Cyrillic", "Greek"}
+        excerpt = normalize.native_excerpt(alias)
+        latin_parts = [part for part in normalize.normalize_parts(alias) if part and ord(part[0]) < 128]
+        if not (scripts and excerpt and latin_parts):
+            continue
+        gloss = []
+        for part in latin_parts:
+            chosen = part
+            for folded, word in folded_words:
+                close = folded == part or (
+                    min(len(folded), len(part)) >= 4 and abs(len(folded) - len(part)) <= 2 and normalize._distance(folded, part) <= 2
+                )
+                if close:
+                    chosen = word
+                    break
+            gloss.append(chosen)
+        return f"{sorted(scripts)[0]} alias {excerpt} ({hit_id} aliases) may transliterate to {' '.join(gloss)}"
+    return ""
+
+
 def build_reason(
     decision,
     code,
@@ -1849,153 +2023,118 @@ def build_reason(
     dob_verified=False,
     dob_risky=False,
     script_note="",
+    script_blocked=False,
+    store=None,
+    facts=None,
+    search_ids=None,
 ):
-    hit_name = hit.get("name") or "the listed name"
+    """One or two sentences. Every fact names its value and the record that holds it."""
+    facts = facts or {}
+    search_ids = search_ids or []
+    hit_id = hit.get("hit_id")
+    alert_id = hit.get("alert_id")
+    hit_name = hit.get("name") or "not on the list entry"
     dob_text = customer_dob.iso() if customer_dob and customer_dob.y else None
-    dob_bit = f"{dob_text} ({dob_source})" if dob_text and dob_source else dob_text
-    cust_places = join_countries(customer_countries)
-    hit_places = join_countries(hit_countries)
-    shared = join_countries(overlap)
+    if dob_text:
+        cust_dob = _person_value(dob_text, dob_source, facts, "dob")
+    elif seed:
+        cust_dob = f"not on the customer record ({seed} dob; no approved check)"
+    else:
+        cust_dob = "not on the customer record (no approved check)"
+    hit_dob = _hit_dob_cite(hit, dob_origin, dob_phrase, search_ids)
+    if compare_name:
+        name_cite = _person_value(compare_name, name_source, facts, "full_name")
+    elif seed:
+        name_cite = f"not on the customer record ({seed} full_name; no approved check)"
+    else:
+        name_cite = "not on the customer record (no approved check)"
+    list_name = _hit_value(hit_name, hit_id, "primary_name")
+    shared = _short_places(overlap)
+    cust_places = _customer_countries_cite(store, seed, customer_countries, facts)
+    hit_field = _country_field(hit)
+    hit_places = _hit_value(_short_places(hit_countries) if hit_countries else None, hit_id, hit_field)
+    years = [int(item) for item in re.findall(r"\b(?:19|20)\d{2}\b", dob_phrase or "")]
+    gap = min(abs(customer_dob.y - year) for year in years) if customer_dob and customer_dob.y and years else None
+    gap_text = f"{gap} years apart" if gap and gap > 1 else "more than 1 year apart"
+
+    if script_blocked:
+        alias = _alias_transliteration(hit, compare_name)
+        if not alias:
+            alias = f"A non-Latin alias ({hit_id} aliases) may transliterate to the list name"
+        text = f"{alias}; verified name {name_cite}, so not cleared on name."
+        if dob_origin == "none":
+            text += f" Hit DOB is {_hit_value(None, hit_id, 'dobs')}."
+        return _clip_reason(text)
+
     if undated_death and decision == "REVIEW" and not applicable and not blocked_review:
-        if name_agree and dob_bit and dob_phrase:
-            agreed = f"The customer's name agrees with the hit's name {hit_name}, and the date of birth {dob_bit} agrees with the hit's {dob_phrase}."
-        elif name_agree:
-            agreed = f"The customer's name agrees with the hit's name {hit_name}."
-        else:
-            agreed = f"The hit name is {hit_name}."
-        return " ".join(
-            [
-                sentence(f"The profile marks {hit_name} as deceased but gives no date of death"),
-                agreed,
-                sentence("Without a date of death the hit can be neither cleared as deceased nor confirmed. A profile line that gives the date of death would settle it"),
-            ]
+        return _clip_reason(
+            f"life_status is Deceased ({hit_id} life_status) but deceased_date is not on the list entry. A death date would settle it."
         )
 
     if decision == "SAME_ENTITY" and code == "NAME_LOCATION_MATCH":
-        lines = [
-            sentence(f"Both the customer and the hit are linked to {shared}"),
-            sentence(f"The customer's name agrees with the hit's name {hit_name}"),
-        ]
-        if script_note:
-            lines.append(sentence(script_note))
-        return " ".join(lines[:4])
+        return _clip_reason(
+            f"Name {name_cite} agrees with {list_name}. Shared country {shared} ({seed}; {hit_id} {hit_field})."
+        )
     if decision == "SAME_ENTITY":
-        lines = [
-            sentence(f"The customer's date of birth {dob_bit} agrees with the hit's {dob_phrase}"),
-        ]
-        if shared:
-            lines.append(sentence(f"Both the customer and the hit are linked to {shared}"))
-        lines.append(sentence(f"The customer's name agrees with the hit's name {hit_name}"))
-        if script_note:
-            lines.append(sentence(script_note))
-        return " ".join(lines[:4])
+        country = f" Shared country {shared} in {cust_places}." if overlap else ""
+        return _clip_reason(f"DOB {cust_dob} agrees with hit DOB {hit_dob}; name agrees with {list_name}.{country}")
 
     if blocked_review:
-        lines = [
-            sentence(
-                f"The customer's date of birth {dob_bit} agrees with the hit's {dob_phrase}, and the customer's name agrees with the hit's name {hit_name}"
-            ),
-            sentence(f"The customer is linked only to {cust_places} but the hit is linked only to {hit_places}"),
-            sentence("A country difference does not clear a hit whose name and date of birth agree. A record placing the customer in the hit's country would settle it"),
-        ]
-        if script_note:
-            lines.append(sentence(script_note))
-        return " ".join(lines[:4])
+        return _clip_reason(
+            f"DOB {cust_dob} agrees with hit DOB {hit_dob} and name agrees with {list_name}, but countries do not: {cust_places} vs {hit_places}. A record placing the customer in the hit country would settle it."
+        )
 
-    sentences = {}
-    if "TEMPORAL_IMPOSSIBILITY" in applicable and earliest:
+    if code == "DOB_MISMATCH":
+        return _clip_reason(f"Hit DOB {hit_dob} contradicts customer DOB {cust_dob}; {gap_text}.")
+    if code == "NAME_MISMATCH_VERIFIED":
+        return _clip_reason(f"Verified name {name_cite} does not match list name {list_name}.")
+    if code == "LOCATION_MISMATCH":
+        return _clip_reason(f"Customer countries {cust_places} do not overlap hit countries {hit_places}.")
+    if code == "DECEASED" and death and screened_on:
+        return _clip_reason(
+            f"Hit death date {death.iso()} ({hit_id} deceased_date) is before screening {screened_on.iso()} ({alert_id} screened_at)."
+        )
+    if code == "TEMPORAL_IMPOSSIBILITY" and earliest:
         if is_company:
-            sentences["TEMPORAL_IMPOSSIBILITY"] = sentence(
-                f"The customer was incorporated on {dob_bit}, which is after the hit's earliest dated report on {earliest.iso()}"
+            return _clip_reason(
+                f"Incorporated {cust_dob} is after the earliest report {earliest.iso()} ({hit_id} profile_notes)."
             )
-        else:
-            sentences["TEMPORAL_IMPOSSIBILITY"] = sentence(
-                f"The customer was born in {customer_dob.y} ({dob_source}), so they were at most {at_most} when the hit's profile reports activity on {earliest.iso()}"
-            )
-    if "DECEASED" in applicable and death and screened_on:
-        sentences["DECEASED"] = sentence(
-            f"The hit profile gives a date of death of {death.iso()}, which is before the customer was screened on {screened_on.iso()}"
+        return _clip_reason(
+            f"DOB {cust_dob} is at most {at_most} on {earliest.iso()} ({hit_id} profile_notes); under 16."
         )
-    if "DOB_MISMATCH" in applicable:
-        fact = "birth date" if "-" in (dob_phrase or "") else "birth year"
-        if dob_origin == "notes":
-            contrary = f"the hit's profile notes put its {fact} at {dob_phrase}"
-        elif dob_origin == "search":
-            contrary = f"the hit's search results put its {fact} at {dob_phrase}"
-        else:
-            contrary = f"the hit's listed date of birth is {dob_phrase}"
-        sentences["DOB_MISMATCH"] = sentence(f"The customer's date of birth is {dob_bit} but {contrary}")
-    if "LOCATION_MISMATCH" in applicable:
-        sentences["LOCATION_MISMATCH"] = sentence(
-            f"The customer is linked only to {cust_places} but the hit is linked only to {hit_places}"
-        )
-    if "NAME_MISMATCH_VERIFIED" in applicable:
-        sentences["NAME_MISMATCH_VERIFIED"] = sentence(
-            f"The customer's verified name is {compare_name} ({name_source}), which does not match the hit's name {hit_name}"
-        )
-    if "ENTITY_TYPE_MISMATCH" in applicable:
+    if code == "ENTITY_TYPE_MISMATCH":
         cust_kind = "a company" if is_company else "an individual"
         hit_kind = "a company" if company_flag(hit.get("entity_type")) else "an individual"
-        sentences["ENTITY_TYPE_MISMATCH"] = sentence(
-            f"The customer is {cust_kind} but the hit is {hit_kind}, so they cannot be the same entity"
+        who = f"{seed} entity_type" if seed else "no customer record"
+        return _clip_reason(
+            f"Customer is {cust_kind} ({who}) and the hit is {hit_kind} ({hit_id} entity_type)."
         )
-    if sentences:
-        # The chosen reason code leads. Other contradictions follow, without repeating it.
-        order = [
-            "ENTITY_TYPE_MISMATCH",
-            "DECEASED",
-            "TEMPORAL_IMPOSSIBILITY",
-            "DOB_MISMATCH",
-            "LOCATION_MISMATCH",
-            "NAME_MISMATCH_VERIFIED",
-        ]
-        lines = []
-        if code in sentences:
-            lines.append(sentences[code])
-        for key in order:
-            if key != code and key in sentences:
-                lines.append(sentences[key])
-        if len(lines) == 1:
-            lines.append(second_fact(code, hit_name, cust_places, hit_places, dob_bit, dob_phrase, compare_name, earliest, at_most))
-        return " ".join(lines[:4])
 
-    # REVIEW. Say what is missing, then the document that would settle it.
-    if dob_risky and not dob_verified:
-        missing = f"The customer date {dob_bit} is not on an approved identity check, and the hit date {dob_phrase} differs only by month or day in the same year"
-        document = "An approved identity document with the date of birth would settle it"
-    elif dob_risky:
-        missing = f"The customer date {dob_bit} and the hit date {dob_phrase} differ only by month or day in the same year, and a 1 January listing or a swapped day and month is not a safe clearance"
-        document = "An identity document whose date matches the hit exactly would settle it"
-    elif not dob_text and dob_origin == "none":
-        missing = "The customer has no date of birth, and the hit has no date of birth, no age in the first paragraph, and no qualifying search result"
-        document = "An approved identity document with a date of birth would settle it"
-    elif dob_text and dob_origin == "none":
-        missing = f"The hit has no date of birth, no age in the first paragraph, and no qualifying search result, so {dob_bit} cannot be compared"
-        document = "A listed date of birth for the hit would settle it"
-    elif not dob_text and dob_phrase:
-        missing = f"The customer has no date of birth to set against the hit date {dob_phrase}"
-        document = "An approved identity document with a date of birth would settle it"
-    elif dob_text and dob_phrase:
-        missing = f"The customer date {dob_bit} and the hit date {dob_phrase} are too close to contradict and do not agree"
-        document = "A full date of birth on both sides would settle it"
-    else:
-        missing = f"Hit {hit.get('hit_id')} has no contradiction and no confirming date of birth"
-        document = "An approved identity document with a date of birth would settle it"
-    lines = []
-    if shared and name_agree:
-        lines.append(sentence(f"Both the customer and the hit are linked to {shared}"))
-        lines.append(sentence(f"The customer's name agrees with the hit's name {hit_name}"))
-    elif name_agree:
-        lines.append(sentence(f"The customer's name agrees with the hit's name {hit_name}"))
-    elif compare_name:
-        lines.append(sentence(f"The customer name on file is {compare_name}"))
-    else:
-        lines.append(sentence(f"The hit name is {hit_name}"))
-    lines.append(sentence(missing))
-    lines.append(sentence(document))
-    if script_note:
-        lines.append(sentence(script_note))
-    return " ".join(lines[:4])
+    # REVIEW. Name the missing or conflicting fact and the document that would settle it.
+    if dob_risky:
+        return _clip_reason(
+            f"Customer DOB {cust_dob} and hit DOB {hit_dob} differ only by month or day in the same year. An identity document that matches the hit date exactly would settle it."
+        )
+    if not dob_text and dob_origin == "none":
+        return _clip_reason(
+            f"Customer DOB is {cust_dob} and hit DOB is {hit_dob}. An approved identity document with a date of birth would settle it."
+        )
+    if dob_text and dob_origin == "none":
+        return _clip_reason(
+            f"Customer DOB {cust_dob} cannot be compared: hit DOB is {hit_dob}. A listed date of birth would settle it."
+        )
+    if not dob_text and dob_phrase:
+        return _clip_reason(
+            f"Customer DOB is {cust_dob} against hit DOB {hit_dob}. An approved identity document with a date of birth would settle it."
+        )
+    if dob_text and dob_phrase:
+        return _clip_reason(
+            f"Customer DOB {cust_dob} and hit DOB {hit_dob} neither agree nor contradict. A full date of birth on both sides would settle it."
+        )
+    return _clip_reason(
+        f"List name {list_name} has no contradiction and no confirming date of birth. An approved identity document with a date of birth would settle it."
+    )
+
 
 
 def build_evidence(
@@ -2080,9 +2219,9 @@ def combine(alert, hit, outcomes):
                 "decision": "DIFFERENT_ENTITY",
                 "reason_code": "ENTITY_TYPE_MISMATCH",
                 "customer_record_id": None,
-                "reason": sentence(f"The screened customer is {kind_c} but the hit is {kind_h}, so they cannot be the same entity")
-                + " "
-                + sentence("No customer record was required to see that the entity types contradict"),
+                "reason": _clip_reason(
+                    f"Screened customer is {kind_c} ({alert_id} customer.entity_type) and the hit is {kind_h} ({hit_id} entity_type)."
+                ),
                 "evidence": [],
             }
         return {
@@ -2091,9 +2230,9 @@ def combine(alert, hit, outcomes):
             "decision": "REVIEW",
             "reason_code": "INSUFFICIENT_DATA",
             "customer_record_id": None,
-            "reason": sentence(f"No customer record fits the screened details for hit {hit_id}")
-            + " "
-            + sentence(f"The hit name {hit.get('name')} cannot be compared with a resolved customer, so the match is left for review"),
+            "reason": _clip_reason(
+                f"No customer record fits list name {hit.get('name') or 'not on the list entry'} ({hit_id} primary_name). An account link would settle it."
+            ),
             "evidence": [],
         }
 
@@ -2131,19 +2270,17 @@ def combine(alert, hit, outcomes):
             "evidence": evidence,
             "_audit": audit,
         }
-    ids = ", ".join(item["customer_record_id"] for item in outcomes)
-    summary = ", ".join(f"{item['customer_record_id']} {item['decision']}" for item in outcomes)
+    id_list = [item["customer_record_id"] for item in outcomes if item.get("customer_record_id")]
+    ids = ", ".join(id_list[:3]) + (f" and {len(id_list) - 3} more" if len(id_list) > 3 else "")
     return {
         "hit_id": hit_id,
         "alert_id": alert_id,
         "decision": "REVIEW",
         "reason_code": "AMBIGUOUS_CUSTOMER_RECORD",
         "customer_record_id": "AMBIGUOUS",
-        "reason": sentence(f"More than one person fits this alert ({ids})")
-        + " "
-        + sentence(f"Those records lead to different decisions ({summary})")
-        + " "
-        + sentence(f"Hit {hit.get('name')} is left for review because the customer record is ambiguous"),
+        "reason": _clip_reason(
+            f"Records {ids} lead to different decisions. A document that picks one person would settle it."
+        ),
         "evidence": evidence,
     }
 
@@ -2324,9 +2461,9 @@ def _failsafe(hit):
         "decision": "REVIEW",
         "reason_code": "INSUFFICIENT_DATA",
         "customer_record_id": None,
-        "reason": sentence(f"Hit {hit.get('hit_id')} has no settled answer")
-        + " "
-        + sentence("It is left for review rather than cleared"),
+        "reason": _clip_reason(
+            f"Hit {hit.get('hit_id')} has no settled answer ({hit.get('hit_id')} primary_name). It is left for review."
+        ),
         "evidence": [],
     }
 
@@ -2377,7 +2514,8 @@ def _write_rows(output_path, hits, answered, logs):
     counts = defaultdict(int)
     with open(output_path, "w", encoding="utf-8") as handle, open(side, "w", encoding="utf-8") as jev_handle:
         for hit in hits:
-            row = answered.get(hit["hit_id"]) or _failsafe(hit)
+            row = dict(answered.get(hit["hit_id"]) or _failsafe(hit))
+            row["evidence"] = cited_ids(row.get("reason"))
             counts[row["decision"]] += 1
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
         for log in logs:

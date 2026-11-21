@@ -80,10 +80,40 @@ def validate(data, output):
                 elif item not in known:
                     errors.append(f"{where}: evidence {item} does not exist in the data folder")
             answers[hit_id] = row
+            for problem in grounding_problems(row):
+                errors.append(f"{where}: {problem}")
     missing = [hit_id for hit_id in hits if hit_id not in answers]
     if missing:
         errors.append(f"{len(missing)} hits have no line (they count as REVIEW), e.g. {missing[:3]}")
     return answers, errors
+
+
+_GROUND_ID = re.compile(r"\b(?:H|CUS|KYC|NOTE|SR|A|ACC|APP)-[0-9A-Za-z]+\b")
+
+
+def grounding_problems(row):
+    """Every cited id is in evidence, and every evidence id is written in the reason."""
+    reason = row.get("reason") or ""
+    evidence = row.get("evidence") or []
+    if not isinstance(evidence, list):
+        return ["evidence must be a list"]
+    cited = set(_GROUND_ID.findall(reason))
+    ev = {item for item in evidence if isinstance(item, str)}
+    problems = []
+    if len(reason) > 300:
+        problems.append(f"reason is {len(reason)} characters")
+    # Abbreviation dots (L.P., S.A., N.A.) are not sentence breaks.
+    readable = re.sub(r"\.(?=[A-Za-z])", "", reason)
+    sentences = [part for part in re.split(r"[.!?]+", readable) if part.strip()]
+    if len(sentences) > 2:
+        problems.append(f"reason has {len(sentences)} sentences")
+    missing = sorted(cited - ev)
+    extra = sorted(ev - cited)
+    if missing:
+        problems.append(f"reason cites {missing} but evidence does not")
+    if extra:
+        problems.append(f"evidence {extra} is not referenced in the reason")
+    return problems
 
 
 def self_score(answers, practice):

@@ -23,7 +23,7 @@ Names are compared after NFKC, casefold, and stripping diacritics. Cyrillic, Gre
 
 The rules then clear on a contradiction (type, death, age under 16, date of birth, verified name, or location), confirm a person on name plus date of birth, or a company on name plus country, and leave everything else as `REVIEW`. A country clash does not clear a hit whose name and date already agree.
 
-Evidence is the ids of the records that decided the hit. Output order is `hit_id`. Sets are sorted before they affect a choice, so two runs write the same file.
+Evidence is the ids of the records that decided the hit, and every reason quotes the value with that id. A reason is one or two sentences. Output order is `hit_id`. Sets are sorted before they affect a choice, so two runs write the same file.
 
 ## How to run
 
