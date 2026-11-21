@@ -172,7 +172,7 @@ Distribution: **`DIFFERENT_ENTITY` 28, `SAME_ENTITY` 12, `REVIEW` 10**. This sli
 3. **Default `REVIEW` unless a contradiction or a full confirm rule fires.** All 10 practice reviews are "name agrees, countries overlap or don't contradict, no hit DOB". That pattern will be common in the 667 hits with no structured DOB (only a minority will have an extractable age).
 4. **Country normalisation and address-tail parsing** unlock `LOCATION_MISMATCH` and company `NAME_LOCATION_MATCH`. 732 hits have a usable country once addresses are parsed; only 474 have `countries` filled.
 5. **Lived-in notes (881)** add customer countries that CRM residence may miss, and are cited in practice (`NOTE-7F183D`, `NOTE-F302A4`, `NOTE-F1D4BE`).
-6. **Determinism:** no randomness in the data. Decisions are deterministic rules only; no model is used. Reproducibility is part of the official score.
+6. **Determinism:** no randomness in the data. Decisions are deterministic rules only; no model decides. Grok writes the reason wording, checked against the record. Reproducibility is part of the official score.
 7. **Cite minimally:** only the records that decided it (a CUS and the KYC or NOTE that supplied the verified fact; an SR only when it supplied the hit DOB). Practice evidence is small.
 
 ## 10. Signals that should force REVIEW

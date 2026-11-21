@@ -1,6 +1,6 @@
 # Identity resolver
 
-Deterministic SOP engine for watchlist hits. Decisions are deterministic rules only; no model is used. See `PRINCIPLES.md`.
+Deterministic SOP engine for watchlist hits. Decisions are deterministic rules only; no model decides. Grok writes the reason wording, checked against the record. See `PRINCIPLES.md`.
 
 ## Architecture
 
@@ -32,7 +32,7 @@ system/run dev output/dev.jsonl
 python3 validate.py --data dev --output output/dev.jsonl --score dev/practice_labels.jsonl
 ```
 
-Python 3 standard library only. A development run of 819 hits takes about 4 seconds. Decisions are deterministic rules only; no model is used. The run does not use the network.
+Python 3 standard library only. A development run of 819 hits takes about 4 seconds. Decisions are deterministic rules only; no model decides. Grok writes the reason wording, checked against the record. The run does not use the network.
 
 ## Three cases
 
