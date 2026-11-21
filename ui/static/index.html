@@ -42,6 +42,11 @@
   <p class="banner" id="banner"></p>
   <p class="ticker" id="ticker" aria-live="polite">Loading the recorded file…</p>
 
+  <section class="funnel" id="funnel" aria-label="Hit funnel">
+    <p class="bar-label">From the output file</p>
+    <div class="funnel-row" id="funnel-row"></div>
+  </section>
+
   <section class="kpis" id="kpis" aria-label="Run totals"></section>
 
   <div class="bar-wrap">
@@ -50,7 +55,8 @@
   </div>
 
   <div class="tabs" role="tablist">
-    <button type="button" role="tab" id="tab-simple" aria-controls="panel-simple" aria-selected="true">Simple</button>
+    <button type="button" role="tab" id="tab-workflow" aria-controls="panel-workflow" aria-selected="true">Workflow</button>
+    <button type="button" role="tab" id="tab-simple" aria-controls="panel-simple" aria-selected="false">Simple</button>
     <button type="button" role="tab" id="tab-detailed" aria-controls="panel-detailed" aria-selected="false">Detailed</button>
   </div>
 
@@ -66,7 +72,8 @@
 
   <div class="layout">
     <div class="main">
-      <div id="panel-simple" role="tabpanel" aria-labelledby="tab-simple"></div>
+      <div id="panel-workflow" role="tabpanel" aria-labelledby="tab-workflow"></div>
+      <div id="panel-simple" role="tabpanel" aria-labelledby="tab-simple" hidden></div>
       <div id="panel-detailed" role="tabpanel" aria-labelledby="tab-detailed" hidden></div>
     </div>
     <aside>

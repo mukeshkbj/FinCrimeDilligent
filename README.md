@@ -4,6 +4,50 @@ Sanctions-screening identity resolver for Diligent Track 2. For every watchlist 
 
 Read [PRINCIPLES.md](PRINCIPLES.md) before changing the rules. Agents should also read [AGENTS.md](AGENTS.md). How the files behave is in [DATA_NOTES.md](DATA_NOTES.md). The engine write-up, diagram, and three cases are in [system/README.md](system/README.md).
 
+## Quick start
+
+`dev/` is the data room. It is not in git.
+
+```bash
+system/run dev output/dev.jsonl
+```
+
+Writes one decision line per hit. A run of this room printed:
+
+```text
+wrote 819 hits in 4.5s DIFFERENT=457 SAME=124 REVIEW=238
+```
+
+```bash
+python3 validate.py --data dev --output output/dev.jsonl --score dev/practice_labels.jsonl
+```
+
+Checks the file shape and scores the 50 practice labels. This file printed:
+
+```text
+819 lines read, 0 problems
+practice labels: 50 hits, 50 right decisions, 0 unsafe clearances
+decision score 100.0 (0 = all REVIEW, 100 = perfect)
+on right decisions: reason code 100%, customer record 100%
+```
+
+```bash
+python3 ui/serve.py dev output/dev.jsonl   # opens http://127.0.0.1:8765/
+```
+
+Displays that file and does not score or rewrite it. The process prints `screening desk on http://127.0.0.1:8765`. The page opens on the workflow: alert, customer found, identity, comparison, and the decision. A funnel above it counts hits, customers found, cleared, kept open, and sent to review from the output file. The compare stage shows the list name with the original script beside it when the file has one. Cited record ids in the reason are shown as source chips. Simple and Detailed stay on the same page.
+
+### Try these hits
+
+Open `http://127.0.0.1:8765/?hit=H-2808BE` (or the other ids). The one-line reason is the sentence in `output/dev.jsonl`.
+
+| Hit | Result | Reason |
+|---|---|---|
+| `H-2808BE` | Cleared | Verified name CHINEDU AZEEZ (KYC-20EE17, approved 2023-07-23) does not match list name Ridwan, Azeez (H-2808BE primary_name). |
+| `H-80B4B5` | Kept open | DOB 1977-01-11 (NOTE-23FC8E, approved 2025-02-02) agrees with hit DOB 1976 or 1977 (SR-01BFC3 snippet); name agrees with Jérôme Kerviel (H-80B4B5 primary_name). |
+| `H-FF3096` | Review | Customer DOB 1965-05-19 (NOTE-588201, approved 2024-10-06) cannot be compared: hit DOB is not on the list entry (H-FF3096 dobs). |
+| `H-B47A06` | Review, original script on the list name | Arabic alias غاريث وين (H-B47A06 aliases) may transliterate to Gareth Wyn; verified name Gareth Wyn Llewellyn (KYC-091221, approved 2025-03-28), so not cleared on name. |
+
 ## Run
 
 ```bash
