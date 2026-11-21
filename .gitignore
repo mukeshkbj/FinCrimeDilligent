@@ -4,14 +4,11 @@ dev/
 *.xlsx
 .env
 .env.*
-!.env.example
 *.key
 __pycache__/
 *.pyc
 .cache/
 .venv/
-system/.llm-cache/
-output/.llm-cache/
 *.jev.jsonl
 ui/analyst_labels.jsonl
 docs/internal/

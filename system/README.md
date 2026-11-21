@@ -1,6 +1,6 @@
 # Identity resolver
 
-Deterministic SOP engine for watchlist hits. It does not need a model. With no `OPENROUTER_API_KEY` it never calls one. Jev (`typesafe/jev-router`) and Grok (`x-ai/grok-4.x`) are optional, cached, and cannot override a rule that already settled the hit. See `PRINCIPLES.md`.
+Deterministic SOP engine for watchlist hits. Decisions are deterministic rules only; no model is used. See `PRINCIPLES.md`.
 
 ## Architecture
 
@@ -32,7 +32,7 @@ system/run dev output/dev.jsonl
 python3 validate.py --data dev --output output/dev.jsonl --score dev/practice_labels.jsonl
 ```
 
-Python 3 standard library only. A development run of 819 hits takes about 4 seconds and does not call a network. No model spend on that path.
+Python 3 standard library only. A development run of 819 hits takes about 4 seconds. Decisions are deterministic rules only; no model is used. The run does not use the network.
 
 ## Three cases
 
@@ -42,6 +42,3 @@ Python 3 standard library only. A development run of 819 hits takes about 4 seco
 
 **Left for review, `H-FF3096`.** Abdul Rahman Yasin matches the hit's name, and a note says the customer lived in the United States, which is the hit's country. The hit has no date of birth, no age in the first paragraph, and no qualifying search result, so the customer date cannot be compared. A listed date of birth for the hit would settle it. The decision is `REVIEW` / `INSUFFICIENT_DATA`, citing only `NOTE-10AEAB`. The customer record's Australia residence is not cited, because that country is not what decided the hit.
 
-## Models
-
-With no API key the run is the rules above and does not touch the network. `system/llm.py` is optional. `OPENROUTER_API_KEY` uses `https://openrouter.ai/api/v1` and the pinned id `typesafe/jev-router`. Otherwise `XAI_API_KEY` uses `https://api.x.ai/v1` and the pinned id `grok-4.3`. The model may only object to a clearance, and only with a verbatim quote and confidence of at least 60/63. It cannot create `DIFFERENT_ENTITY` or `SAME_ENTITY`, and it does not supply birth years. Seed is 1. Each call waits at most 8 seconds, and the run stops after 120 calls or 10 minutes. A missing key, an error, or an exhausted budget leaves the rules in place. Reason wording changes only when `RESOLVE_POLISH_REASONS=1`, and it cannot change the decision or the reason code. Calls are temperature 0 and cached by request hash under `system/.llm-cache/`, which is not committed. Keys stay in the environment.

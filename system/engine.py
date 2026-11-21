@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Deterministic sanctions identity resolver.
 
-Decisions follow dev/POLICY.md literally. A model is never required. It may
-only send a clearance back to review, and with no key it is not called. The
-same inputs and the same key state produce the same decision and reason code.
+Decisions follow dev/POLICY.md literally. Decisions are deterministic rules
+only; no model is used. The same inputs always produce the same file.
 See PRINCIPLES.md.
 """
 
@@ -1809,21 +1808,6 @@ def decide_person(store, alert, hit, seed, group, screened):
         "reason": reason,
         "evidence": evidence,
         "group": sorted(group),
-        "_audit": {
-            "name_agree": bool(name_agree),
-            "dob_agree": bool(dob_agree),
-            "dob_mismatch": bool(dob_mismatch),
-            "location_mismatch": bool(location_mismatch),
-            "name_mismatch": bool(name_mismatch),
-            "compare_name": compare_name,
-            "hit_names": hit_names,
-            "is_company": bool(is_company),
-            "customer_y": customer_dob.y if customer_dob else None,
-            "customer_m": customer_dob.m if customer_dob else None,
-            "customer_d": customer_dob.d if customer_dob else None,
-            "hit_dates": [[item.y, item.m, item.d] for item in hit_dobs],
-            "people": 1,
-        },
     }
 
 
@@ -2254,12 +2238,9 @@ def combine(alert, hit, outcomes):
             "customer_record_id": chosen["customer_record_id"],
             "reason": chosen["reason"],
             "evidence": chosen["evidence"],
-            "_audit": chosen.get("_audit") or {},
         }
     if len(decisions) == 1:
         chosen = outcomes[0]
-        audit = dict(chosen.get("_audit") or {})
-        audit["people"] = len(outcomes)
         return {
             "hit_id": hit_id,
             "alert_id": alert_id,
@@ -2268,7 +2249,6 @@ def combine(alert, hit, outcomes):
             "customer_record_id": "AMBIGUOUS",
             "reason": chosen["reason"],
             "evidence": evidence,
-            "_audit": audit,
         }
     id_list = [item["customer_record_id"] for item in outcomes if item.get("customer_record_id")]
     ids = ", ".join(id_list[:3]) + (f" and {len(id_list) - 3} more" if len(id_list) > 3 else "")
@@ -2285,33 +2265,6 @@ def combine(alert, hit, outcomes):
     }
 
 
-def _model_birth_years(text):
-    if not text:
-        return None
-    try:
-        import llm
-    except ImportError:
-        return None
-    try:
-        return llm.birth_years(text)
-    except Exception:
-        return None
-
-
-def _maybe_polish(row, hit):
-    try:
-        import llm
-    except ImportError:
-        return row
-    try:
-        polished = llm.polish_reason(row.get("reason"), row.get("decision"), row.get("reason_code"), hit.get("name"))
-    except Exception:
-        return row
-    if polished:
-        row["reason"] = polished
-    return row
-
-
 def resolve_hit(store, hit):
     alert = store.alerts.get(hit["alert_id"])
     if alert is None:
@@ -2320,47 +2273,7 @@ def resolve_hit(store, hit):
     seeds = resolve_seeds(store, alert, screened)
     groups = person_groups(store, seeds)
     outcomes = [decide_person(store, alert, hit, seed, group, screened) for seed, group in groups]
-    return _maybe_polish(combine(alert, hit, outcomes), hit)
-
-
-def _second_dob(year, month, day, hit_dates):
-    """Independent date check. Unknown when either side has no year."""
-    if year is None or not hit_dates:
-        return "unknown"
-    agrees = False
-    contradicted = 0
-    usable = 0
-    for item in hit_dates:
-        hit_year, hit_month, hit_day = item[0], item[1], item[2]
-        if hit_year is None:
-            continue
-        usable += 1
-        month_clash = bool(month and hit_month and year == hit_year and month != hit_month)
-        day_clash = bool(
-            day and hit_day and month and hit_month and year == hit_year and month == hit_month and day != hit_day
-        )
-        if year == hit_year and not month_clash and not day_clash:
-            agrees = True
-        if abs(year - hit_year) > 1 or month_clash or day_clash:
-            contradicted += 1
-    if agrees:
-        return "agree"
-    if usable and contradicted == usable:
-        return "contradict"
-    return "unknown"
-
-
-def _evidence_known(store, evidence_id):
-    if not evidence_id or evidence_id.startswith("http"):
-        return True
-    return (
-        evidence_id in store.customers
-        or evidence_id in store.kyc
-        or evidence_id in store.notes
-        or evidence_id in store.search
-        or evidence_id in store.hit_ids
-        or evidence_id in store.alerts
-    )
+    return combine(alert, hit, outcomes)
 
 
 _CODE_DECISION = {
@@ -2378,82 +2291,6 @@ _CODE_DECISION = {
 }
 
 
-def apply_jev(row, store):
-    """Judge is the rules decision. Evaluate re-derives name and date. Verify checks citations.
-
-    Disagreement downgrades a clearance or a confirmation to REVIEW. It never creates one.
-    """
-    audit = row.pop("_audit", None) or {}
-    judge = row.get("decision")
-    code = row.get("reason_code")
-    notes = []
-    disagree = False
-    again = None
-    if audit.get("compare_name"):
-        again = any_name_agrees(
-            name_parts(audit.get("compare_name"), bool(audit.get("is_company"))),
-            audit.get("hit_names") or [],
-            bool(audit.get("is_company")),
-        )
-        extra_agree, extra_uncertain, _note = multilingual_relation(
-            audit.get("compare_name"),
-            audit.get("hit_names") or [],
-            bool(audit.get("is_company")),
-        )
-        if extra_agree:
-            again = True
-        elif extra_uncertain and again is False:
-            again = None
-    relation = _second_dob(audit.get("customer_y"), audit.get("customer_m"), audit.get("customer_d"), audit.get("hit_dates") or [])
-    # Only the fact this reason code relies on can force a downgrade.
-    if code == "NAME_MISMATCH_VERIFIED" and again is True:
-        disagree = True
-        notes.append("the names do agree on a second reading, so a name clearance is not safe")
-    if code in ("DOB_MISMATCH", "TEMPORAL_IMPOSSIBILITY") and relation == "agree":
-        disagree = True
-        notes.append("a second date reading still agrees, so this clearance is not safe")
-    if code in ("NAME_DOB_MATCH", "NAME_DOB_LOCATION_MATCH", "NAME_LOCATION_MATCH") and again is False:
-        disagree = True
-        notes.append("a second name reading does not agree")
-    if code in ("NAME_DOB_MATCH", "NAME_DOB_LOCATION_MATCH") and relation == "contradict":
-        disagree = True
-        notes.append("a second date reading contradicts the confirmation")
-    verify_ok = _CODE_DECISION.get(code) == judge
-    verify_note = "reason code fits the decision and the cited records exist"
-    missing = [item for item in (row.get("evidence") or []) if not _evidence_known(store, item)]
-    if not verify_ok:
-        verify_note = "reason code does not fit the decision"
-    elif missing:
-        verify_ok = False
-        verify_note = "cited record is not in the files"
-    elif judge != "REVIEW" and not row.get("evidence"):
-        verify_ok = False
-        verify_note = "a settled decision cites no record"
-    downgrade = bool((disagree or not verify_ok) and judge != "REVIEW")
-    log = {
-        "hit_id": row.get("hit_id"),
-        "judge": {"decision": judge, "reason_code": code},
-        "evaluate": {"agrees": not disagree, "note": "; ".join(notes) or "second path matches the judge"},
-        "verify": {"ok": verify_ok, "note": verify_note},
-        "downgraded": downgrade,
-        "name_agree": bool(audit.get("name_agree")),
-        "dob_agree": bool(audit.get("dob_agree")),
-    }
-    if downgrade:
-        why = notes[0] if notes else verify_note
-        row = dict(row)
-        row["decision"] = "REVIEW"
-        row["reason_code"] = "INSUFFICIENT_DATA"
-        row["reason"] = (
-            sentence("An independent check does not support the first decision on this hit")
-            + " "
-            + sentence(why[:240])
-            + " "
-            + sentence("The hit is left for review")
-        )
-    return row, log
-
-
 def _failsafe(hit):
     return {
         "hit_id": hit.get("hit_id"),
@@ -2468,68 +2305,21 @@ def _failsafe(hit):
     }
 
 
-def _model_downgrade(row, hit, store):
-    """Optional model. It may only send a clearance back to review."""
-    if row.get("decision") != "DIFFERENT_ENTITY":
-        return row
-    try:
-        import llm
-    except ImportError:
-        return row
-    if llm.endpoint() is None:
-        return row
-    try:
-        objection = llm.downgrade_clearance(hit.get("profile_notes") or "", row.get("reason") or "")
-    except Exception:
-        objection = None
-    if objection and (objection.get("quote") or "") not in (hit.get("profile_notes") or ""):
-        objection = None
-    if not objection:
-        for evidence_id in row.get("evidence") or []:
-            if not str(evidence_id).startswith("SR-"):
-                continue
-            snippet = (store.search.get(evidence_id) or {}).get("snippet") or ""
-            try:
-                verdict = llm.search_about(snippet, row.get("reason_code") or "")
-            except Exception:
-                verdict = None
-            if verdict and verdict.get("about") is False and verdict.get("quote") in snippet:
-                objection = verdict
-                break
-    if not objection:
-        return row
-    row = dict(row)
-    row["decision"] = "REVIEW"
-    row["reason_code"] = "INSUFFICIENT_DATA"
-    row["reason"] = (
-        sentence("A checked reading of the profile does not support clearing this hit")
-        + " "
-        + sentence("The hit is left for review")
-    )
-    return row
-
-
-def _write_rows(output_path, hits, answered, logs):
-    side = str(output_path) + ".jev.jsonl" if not str(output_path).endswith(".jsonl") else str(output_path)[:-6] + ".jev.jsonl"
+def _write_rows(output_path, hits, answered):
     counts = defaultdict(int)
-    with open(output_path, "w", encoding="utf-8") as handle, open(side, "w", encoding="utf-8") as jev_handle:
+    with open(output_path, "w", encoding="utf-8") as handle:
         for hit in hits:
             row = dict(answered.get(hit["hit_id"]) or _failsafe(hit))
+            row.pop("_audit", None)
+            row.pop("group", None)
             row["evidence"] = cited_ids(row.get("reason"))
             counts[row["decision"]] += 1
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
-        for log in logs:
-            jev_handle.write(json.dumps(log, ensure_ascii=False) + "\n")
     return counts
 
 
 def run(data_dir, output_path):
     started = time.time()
-    try:
-        import llm
-        llm.reset_budget()
-    except Exception:
-        pass
     store = None
     try:
         store = Store(data_dir)
@@ -2540,11 +2330,7 @@ def run(data_dir, output_path):
         hits = [row for row in hits if row.get("hit_id")]
         store = None
     answered = {}
-    logs = []
-    blank = {"judge": None, "evaluate": {"agrees": False, "note": "no answer"}, "verify": {"ok": False, "note": "missing"}, "downgraded": True, "name_agree": False, "dob_agree": False}
     for hit in hits:
-        log = dict(blank)
-        log["hit_id"] = hit.get("hit_id")
         if store is None:
             row = _failsafe(hit)
         else:
@@ -2555,36 +2341,22 @@ def run(data_dir, output_path):
                 row = _failsafe(hit)
             if not row or not row.get("hit_id") or row.get("decision") not in _CODE_DECISION.values():
                 row = _failsafe(hit)
-            try:
-                row, log = apply_jev(row, store)
-                row = _model_downgrade(row, hit, store)
-            except Exception as error:
-                sys.stderr.write(f"error {hit.get('hit_id')}: {error}\n")
-                row = _failsafe(hit)
-                log = dict(blank)
-                log["hit_id"] = hit.get("hit_id")
         if not row or not row.get("hit_id"):
             row = _failsafe(hit)
         answered[hit["hit_id"]] = row
-        logs.append(log)
     for hit in hits:
         if hit["hit_id"] not in answered:
             answered[hit["hit_id"]] = _failsafe(hit)
-            missing = dict(blank)
-            missing["hit_id"] = hit["hit_id"]
-            logs.append(missing)
     try:
-        counts = _write_rows(output_path, hits, answered, logs)
+        counts = _write_rows(output_path, hits, answered)
     except Exception as error:
         sys.stderr.write(f"write error: {error}\n")
         answered = {hit["hit_id"]: _failsafe(hit) for hit in hits}
-        counts = _write_rows(output_path, hits, answered, logs)
+        counts = _write_rows(output_path, hits, answered)
     elapsed = time.time() - started
-    downgraded = sum(1 for log in logs if log.get("downgraded"))
     sys.stderr.write(
         f"wrote {len(hits)} hits in {elapsed:.1f}s "
-        f"DIFFERENT={counts['DIFFERENT_ENTITY']} SAME={counts['SAME_ENTITY']} REVIEW={counts['REVIEW']} "
-        f"jev_downgraded={downgraded}\n"
+        f"DIFFERENT={counts['DIFFERENT_ENTITY']} SAME={counts['SAME_ENTITY']} REVIEW={counts['REVIEW']}\n"
     )
 
 
@@ -2667,8 +2439,6 @@ def self_test():
 
 
 def main():
-    import dotenv
-    dotenv.load_dotenv()
     if len(sys.argv) == 2 and sys.argv[1] == "--self-test":
         self_test()
         return
@@ -2682,7 +2452,7 @@ def main():
         hits = [row for row in read_jsonl(f"{sys.argv[1]}/hits.jsonl") if row.get("hit_id")]
         hits.sort(key=lambda row: row["hit_id"])
         answered = {hit["hit_id"]: _failsafe(hit) for hit in hits}
-        _write_rows(sys.argv[2], hits, answered, [])
+        _write_rows(sys.argv[2], hits, answered)
 
 
 if __name__ == "__main__":
