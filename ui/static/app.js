@@ -58,6 +58,27 @@ function codeWithPlain(code, map) {
   return `${code} · ${plain}`;
 }
 
+function codeTone(code, map) {
+  if (map === "decisions") {
+    if (code === "DIFFERENT_ENTITY") return "cleared";
+    if (code === "SAME_ENTITY") return "kept";
+    if (code === "REVIEW") return "review";
+  }
+  if (map === "reason_codes") return "reason";
+  if (map === "customer") return "customer";
+  return "neutral";
+}
+
+/** HTML: monospace code badge + English. Safe for innerHTML. */
+function codeBadgeHtml(code, map, fallback) {
+  if (!code) return esc(fallback || "not available");
+  const plain = plainFrom(map, code);
+  const tone = codeTone(code, map);
+  const badge = `<span class="code-badge code-badge-${tone}" title="${esc(codeWithPlain(code, map) || code)}">${esc(code)}</span>`;
+  if (!plain || plain === code) return badge;
+  return `${badge} <span class="code-plain">${esc(plain)}</span>`;
+}
+
 function plainDecision(decision) {
   return plainFrom("decisions", decision) || decision || "";
 }
@@ -68,6 +89,20 @@ function decisionLabel(decision) {
 
 function reasonCodeLabel(code) {
   return codeWithPlain(code, "reason_codes");
+}
+
+function decisionBadge(decision) {
+  return codeBadgeHtml(decision, "decisions");
+}
+
+function reasonBadge(code) {
+  return codeBadgeHtml(code, "reason_codes");
+}
+
+function customerBadge(customerId) {
+  if (!customerId) return esc("not available");
+  if (customerId === "AMBIGUOUS") return codeBadgeHtml(customerId, "customer");
+  return `<span class="code-badge code-badge-id">${esc(customerId)}</span>`;
 }
 
 function customerLabel(customerId) {
@@ -91,9 +126,11 @@ function renderGlossary(labels) {
     ["Alert", "One customer's hits grouped together."],
     ["SAR", "Suspicious Activity Report filed with the UK National Crime Agency; a confirmed match may lead to one."],
   ];
+  const mapFor = { Decisions: "decisions", "Reason codes": "reason_codes", "Customer record": "customer" };
   const codeItems = blocks.map(([title, table]) => {
-    const rows = Object.entries(table).map(([code, plain]) =>
-      `<li><strong>${esc(code)}.</strong> ${esc(plain)}</li>`
+    const map = mapFor[title] || "reason_codes";
+    const rows = Object.entries(table).map(([code]) =>
+      `<li class="glossary-code">${codeBadgeHtml(code, map)}</li>`
     ).join("");
     return `<li class="glossary-group"><strong>${esc(title)}</strong><ul>${rows}</ul></li>`;
   }).join("");
@@ -107,14 +144,17 @@ function renderFilters() {
   const host = $("filters");
   if (!host) return;
   const buttons = [
-    ["review", decisionLabel("REVIEW"), true],
-    ["review_name_dob", "Name and date agree", false],
-    ["cleared", decisionLabel("DIFFERENT_ENTITY"), false],
-    ["kept", decisionLabel("SAME_ENTITY"), false],
+    ["review", "REVIEW", true],
+    ["review_name_dob", null, false],
+    ["cleared", "DIFFERENT_ENTITY", false],
+    ["kept", "SAME_ENTITY", false],
   ];
-  host.innerHTML = buttons.map(([filter, label, primary]) => {
+  host.innerHTML = buttons.map(([filter, decision, primary]) => {
     const cls = primary ? ' class="primary"' : "";
-    return `<button type="button" data-filter="${esc(filter)}"${cls}>${esc(label)}</button>`;
+    const label = decision
+      ? decisionBadge(decision)
+      : esc("Name and date agree");
+    return `<button type="button" data-filter="${esc(filter)}"${cls}>${label}</button>`;
   }).join("");
   host.querySelectorAll("button").forEach((button) => {
     button.onclick = () => loadQueue(button.dataset.filter);
@@ -183,7 +223,7 @@ function renderFunnel(summary) {
     `<div class="funnel-step"><strong>${esc(count)}</strong><span>${esc(label)}</span></div>`
   ).join('<span class="funnel-arrow" aria-hidden="true">→</span>');
   const split = outcomes.map(([kind, count, code]) =>
-    `<div class="outcome-tile ${kind}"><strong>${esc(count)}</strong><span class="code">${esc(code)}</span><span>${esc(plainDecision(code))}</span></div>`
+    `<div class="outcome-tile ${kind}"><strong>${esc(count)}</strong>${decisionBadge(code)}</div>`
   ).join("");
   $("funnel-row").innerHTML = `${main}<span class="funnel-arrow" aria-hidden="true">→</span><div class="funnel-outcomes">${split}</div>`;
 }
@@ -367,7 +407,6 @@ function renderWorkflow(flow) {
     return;
   }
   const decision = flow.decision || "";
-  const label = decisionLabel(decision);
   const stages = flow.stages.map((stage, index) => {
     let body = "";
     if (stage.rows) {
@@ -382,11 +421,12 @@ function renderWorkflow(flow) {
     } else if (stage.key === "decision") {
       const ids = (stage.evidence || []).length ? stage.evidence.map(chipId).join(" ") : "not available";
       const code = stage.reason_code || flow.reason_code || "";
+      const decided = stage.decision || decision;
       body = `
-        <p class="dec-word dec-${esc(stage.decision)}">${esc(decisionLabel(stage.decision || decision))}</p>
+        <p class="dec-word">${decisionBadge(decided)}</p>
         <dl>
-          <dt>Decision</dt><dd><span class="dec-word dec-${esc(stage.decision)}">${esc(decisionLabel(stage.decision || decision) || "not available")}</span></dd>
-          <dt>Reason code</dt><dd>${esc(reasonCodeLabel(code) || "not available")}</dd>
+          <dt>Decision</dt><dd>${decisionBadge(decided)}</dd>
+          <dt>Reason code</dt><dd>${reasonBadge(code)}</dd>
           <dt>Why</dt><dd class="reason">${withChips(stage.reason)}</dd>
           <dt>Evidence</dt><dd>${ids}</dd>
         </dl>`;
@@ -403,7 +443,7 @@ function renderWorkflow(flow) {
   }).join("");
   panel.innerHTML = `
     <div class="wf-head">
-      <p class="card-kicker">${esc(label)}</p>
+      <p class="card-kicker">${decisionBadge(decision)}</p>
       <h2>${esc(flow.list_name || "")}</h2>
     </div>
     <div class="pipeline">${stages}</div>`;
@@ -434,8 +474,8 @@ function renderStep() {
   $("panel-simple").innerHTML = `
     <article class="card now">
       <p class="card-kicker">${initials} · ${simple.screened_on || ""} · ${simple.rule}${step.wow ? " · starred" : ""}</p>
-      <h2>${step.id} · ${esc(reasonCodeLabel(detailed.reason_code || step.title) || simple.plain_code || step.title)}</h2>
-      <p class="outcome ${outcomeClass((detailed && detailed.decision) || simple.outcome)}">${esc(decisionLabel((detailed && detailed.decision) || simple.outcome))}</p>
+      <h2>${step.id} · ${reasonBadge(detailed.reason_code || step.title)}</h2>
+      <p class="outcome ${outcomeClass((detailed && detailed.decision) || simple.outcome)}">${decisionBadge((detailed && detailed.decision) || "")}</p>
       <p><strong>What was asked.</strong> ${esc(simple.asked)}</p>
       <p><strong>What happened.</strong> ${withChips(simple.happened)}</p>
       <p class="meta">${esc(simple.screened_name || "")} was screened against ${esc(simple.hit_name || "the list name")}.</p>
@@ -484,7 +524,7 @@ function renderStep() {
   }
   const jev = detailed.jev || {};
   const jevHtml = jev.judge
-    ? `<section class="panel"><h3>Judge, evaluate, verify</h3><p>Judge ${esc(decisionLabel(jev.judge.decision))} / ${esc(reasonCodeLabel(jev.judge.reason_code))}. Evaluate ${jev.evaluate.agrees ? "agrees" : "disagrees"}. Verify ${jev.verify.ok ? "ok" : "failed"}. ${jev.downgraded ? "Downgraded to REVIEW." : "Not downgraded."}</p><p class="meta">${detailed.model_note || ""} ${detailed.confidence_note || ""}</p></section>`
+    ? `<section class="panel"><h3>Judge, evaluate, verify</h3><p>Judge ${decisionBadge(jev.judge.decision)} / ${reasonBadge(jev.judge.reason_code)}. Evaluate ${jev.evaluate.agrees ? "agrees" : "disagrees"}. Verify ${jev.verify.ok ? "ok" : "failed"}. ${jev.downgraded ? `Downgraded to ${decisionBadge("REVIEW")}.` : "Not downgraded."}</p><p class="meta">${detailed.model_note || ""} ${detailed.confidence_note || ""}</p></section>`
     : "";
   const trail = (detailed.trail || []).map((hop) => `<div class="hop"><strong>${hop.hop}.</strong> ${hop.detail}</div>`).join("");
   const brief = detailed.brief;
@@ -496,15 +536,15 @@ function renderStep() {
   const evidenceHtml = evidenceIds.length ? evidenceIds.map(chipId).join(" ") : "not available";
   $("panel-detailed").innerHTML = `
     <article class="card now">
-      <p class="card-kicker">${step.id} · ${esc(reasonCodeLabel(detailed.reason_code || step.title))}</p>
-      <h2>${esc(decisionLabel(detailed.decision))} · ${esc(reasonCodeLabel(detailed.reason_code))}</h2>
+      <p class="card-kicker">${step.id} · ${reasonBadge(detailed.reason_code || step.title)}</p>
+      <h2 class="code-heading">${decisionBadge(detailed.decision)} ${reasonBadge(detailed.reason_code)}</h2>
       <p><span class="tag real">REAL</span><span class="tag real">rules</span><span class="tag gap">no confidence number in the file</span></p>
-      <section class="panel"><h3>Inputs</h3><p>Hit ${detailed.hit_id} · alert ${detailed.alert_id} · customer ${esc(customerLabel(detailed.customer_record_id))}</p>
+      <section class="panel"><h3>Inputs</h3><p>Hit ${esc(detailed.hit_id || "")} · alert ${esc(detailed.alert_id || "")} · customer ${customerBadge(detailed.customer_record_id)}</p>
         <p>Screened ${detailed.screened && detailed.screened.name} · list name ${detailed.hit && detailed.hit.name}</p></section>
       <section class="panel"><h3>Why this result</h3>
         <dl>
-          <dt>Decision</dt><dd><span class="dec-word dec-${esc(detailed.decision || "")}">${esc(decisionLabel(detailed.decision) || "not available")}</span></dd>
-          <dt>Reason code</dt><dd>${esc(reasonCodeLabel(detailed.reason_code) || "not available")}</dd>
+          <dt>Decision</dt><dd>${decisionBadge(detailed.decision)}</dd>
+          <dt>Reason code</dt><dd>${reasonBadge(detailed.reason_code)}</dd>
           <dt>Why</dt><dd class="reason">${withChips(detailed.why ? detailed.why.answer : detailed.reason)}</dd>
           <dt>Evidence</dt><dd>${evidenceHtml}</dd>
         </dl>
@@ -547,10 +587,8 @@ function showView(name) {
 async function loadQueue(filter) {
   const body = await getJSON("/api/queue?filter=" + encodeURIComponent(filter));
   $("queue").innerHTML = body.hits.map((hit) => {
-    const jevBit = hit.jev ? ` · J/E/V ${hit.jev}` : "";
-    const decision = hit.decision_label || decisionLabel(hit.decision);
-    const code = hit.reason_code_label || reasonCodeLabel(hit.reason_code);
-    return `<button type="button" data-hit="${hit.hit_id}">${esc(hit.hit_id)} · ${esc(hit.name || "")} · ${esc(decision)} · ${esc(code)}${esc(jevBit)}</button>`;
+    const jevBit = hit.jev ? ` · J/E/V ${esc(hit.jev)}` : "";
+    return `<button type="button" data-hit="${esc(hit.hit_id)}"><span class="code-badge code-badge-id">${esc(hit.hit_id)}</span> ${esc(hit.name || "")} ${decisionBadge(hit.decision)} ${reasonBadge(hit.reason_code)}${jevBit}</button>`;
   }).join("") || "<p>None in this filter.</p>";
   $("queue").setAttribute("aria-label", `${body.count} hits in this filter`);
 }
