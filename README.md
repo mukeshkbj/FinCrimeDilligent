@@ -31,6 +31,16 @@ decision score 100.0 (0 = all REVIEW, 100 = perfect)
 on right decisions: reason code 100%, customer record 100%
 ```
 
+To build, run, and score the holdout set:
+
+```bash
+python3 dev/make_unseen.py dev holdout
+system/run holdout output/holdout_cases.jsonl
+python3 validate.py --data holdout --output output/holdout_cases.jsonl --score holdout/holdout_cases.jsonl
+```
+
+`make_unseen.py` builds a full data room under `holdout/` (dev plus synthetic hits). Run against that room, then score with its labels. Do not use `--data dev` with `dev/holdout_cases.jsonl` — those hit ids are not in the base room, so validate reports "you said nothing". Do not commit `holdout/`.
+
 ```bash
 python3 ui/serve.py dev output/dev.jsonl
 # prints: screening desk on http://127.0.0.1:8765/
@@ -55,12 +65,15 @@ Open `http://127.0.0.1:8765/?hit=H-2808BE` (or the other ids; use the port print
 ```bash
 system/run <data_dir> <output_file>
 python3 validate.py --data <data_dir> --output <output_file> --score <data_dir>/practice_labels.jsonl
+python3 dev/make_unseen.py dev holdout
+system/run holdout output/holdout_cases.jsonl
+python3 validate.py --data holdout --output output/holdout_cases.jsonl --score holdout/holdout_cases.jsonl
 python3 ui/serve.py <data_dir> <output_file> [port]
 ```
 
-`data_dir` is the official room (`alerts.jsonl`, `hits.jsonl`, `customers.jsonl`, `accounts.jsonl`, `onboarding.jsonl`, `kyc_checks.jsonl`, `notes.jsonl`, `search_results.jsonl`, `name_variants.json`). The committed predictions are `output/dev.jsonl`. Do not commit `dev/`.
+`data_dir` is the official room (`alerts.jsonl`, `hits.jsonl`, `customers.jsonl`, `accounts.jsonl`, `onboarding.jsonl`, `kyc_checks.jsonl`, `notes.jsonl`, `search_results.jsonl`, `name_variants.json`). Holdout needs its own room from `make_unseen.py`, then `system/run` before validate. The committed predictions are `output/dev.jsonl`. Do not commit `dev/` or `holdout/`.
 
-Python 3 standard library only. Decisions are deterministic rules only; no model decides. Grok writes the reason wording, checked against the record. A full development run is about 4 seconds and does not use the network.
+Python 3 standard library only (no `tqdm` — `system/progress.py` draws a stdlib progress bar). `system/run` and `make_unseen.py` log load stages and show a resolve/build bar on stderr. `validate.py` is the organisers' scorer and only prints the final summary. Decisions are deterministic rules only; no model decides. Grok writes the reason wording, checked against the record. A full development run is about 4 seconds and does not use the network.
 
 ## Practice score
 

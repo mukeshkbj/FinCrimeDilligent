@@ -2,6 +2,7 @@
 # directory at runtime and does not need these files in git.
 dev/
 dev
+holdout/
 *.xlsx
 .env
 .env.*
