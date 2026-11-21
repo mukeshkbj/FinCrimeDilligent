@@ -1,6 +1,6 @@
 # Identity resolver
 
-Deterministic SOP engine for watchlist hits. It does not need a model. With no `OPENROUTER_API_KEY` it never calls one. Jev (`typesafe/jev-router`) and Grok (`x-ai/grok-4.x`) are optional, cached, and cannot override a rule that already settled the hit. See `PRINCIPLES.md`.
+Deterministic SOP engine for watchlist hits. It does not need a model. With no `OPENROUTER_API_KEY` it never calls one. Grok (`x-ai/grok-4.x`) are optional, cached, and cannot override a rule that already settled the hit. See `PRINCIPLES.md`.
 
 ## Architecture
 
@@ -44,4 +44,4 @@ Python 3 standard library only. A development run of 819 hits takes about 4 seco
 
 ## Models
 
-With no API key the run is the rules above and does not touch the network. `system/llm.py` is optional. `OPENROUTER_API_KEY` uses `https://openrouter.ai/api/v1` and the pinned id `typesafe/jev-router`. Otherwise `XAI_API_KEY` uses `https://api.x.ai/v1` and the pinned id `grok-4.3`. The model may only object to a clearance, and only with a verbatim quote and confidence of at least 60/63. It cannot create `DIFFERENT_ENTITY` or `SAME_ENTITY`, and it does not supply birth years. Seed is 1. Each call waits at most 8 seconds, and the run stops after 120 calls or 10 minutes. A missing key, an error, or an exhausted budget leaves the rules in place. Reason wording changes only when `RESOLVE_POLISH_REASONS=1`, and it cannot change the decision or the reason code. Calls are temperature 0 and cached by request hash under `system/.llm-cache/`, which is not committed. Keys stay in the environment.
+With no API key the run is the rules above and does not touch the network. `system/llm.py` is optional. `OPENROUTER_API_KEY` uses `https://openrouter.ai/api/v1`. Otherwise `XAI_API_KEY` uses `https://api.x.ai/v1` and the pinned id `grok-4.3`. The model may only object to a clearance, and only with a verbatim quote and confidence of at least 60/63. It cannot create `DIFFERENT_ENTITY` or `SAME_ENTITY`, and it does not supply birth years. Seed is 1. Each call waits at most 8 seconds, and the run stops after 120 calls or 10 minutes. A missing key, an error, or an exhausted budget leaves the rules in place. Reason wording changes only when `RESOLVE_POLISH_REASONS=1`, and it cannot change the decision or the reason code. Calls are temperature 0 and cached by request hash under `system/.llm-cache/`, which is not committed. Keys stay in the environment.
