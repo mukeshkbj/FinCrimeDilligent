@@ -17,3 +17,4 @@ data/internal/
 .omc/
 system/.llm-cache/
 output/.llm-cache/
+.claude/
