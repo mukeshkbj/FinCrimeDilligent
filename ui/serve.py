@@ -172,7 +172,7 @@ class Desk:
         if accounts_path.is_file():
             for row in read_jsonl(accounts_path):
                 self.accounts.setdefault(row["account_id"], []).append(row["customer_id"])
-        jev_path = Path(str(output_path)[:-6] + ".jev.jsonl") if str(output_path).endswith(".jsonl") else Path(str(output_path) + ".jev.jsonl")
+        jev_path = Path(str(output_path)[:-6] + ".verify.jsonl") if str(output_path).endswith(".jsonl") else Path(str(output_path) + ".verify.jsonl")
         self.jev = index_jsonl(jev_path, "hit_id") if jev_path.is_file() else {}
         self.labels_out = ROOT / "ui" / "analyst_labels.jsonl"
         digest = hashlib.sha256(output_path.read_bytes()).hexdigest()[:12]

@@ -58,7 +58,7 @@ python3 ui/serve.py <data_dir> <output_file>
 
 `data_dir` is the official room (`alerts.jsonl`, `hits.jsonl`, `customers.jsonl`, `accounts.jsonl`, `onboarding.jsonl`, `kyc_checks.jsonl`, `notes.jsonl`, `search_results.jsonl`, `name_variants.json`). The committed predictions are `output/dev.jsonl`. Do not commit `dev/`.
 
-Python 3 standard library only. Decisions are deterministic rules only; no model is used. A full development run is about 4 seconds and does not use the network.
+Python 3 standard library only. Decisions are deterministic rules only; no model decides. Grok writes the reason wording, checked against the record. A full development run is about 4 seconds and does not use the network.
 
 ## Practice score
 
@@ -101,3 +101,9 @@ flowchart LR
 5. Clear on type, death, age under 16, date of birth, verified name, or location. Confirm a person on name and date of birth, or a company on name and country. Otherwise review.
 
 Three worked hits (`H-D861DA` cleared on date of birth, `H-582410` confirmed, `H-FF3096` left for review) are written up in [system/README.md](system/README.md).
+
+## Models
+
+Decisions come from the rules only. A model never decides, and no key can change a decision or a reason code.
+
+Grok writes each reason's wording when a key is set. `OPENROUTER_API_KEY` is used first (`x-ai/grok-4.3`), then `XAI_API_KEY` (`grok-4.3`). Copy `.env.example` to `.env` and fill in the keys; `system/run` loads it without printing values. A Grok reply is kept only when it has 2 to 4 sentences, keeps every record id the template cites, and adds no id, date or number the template lacks. Otherwise the template reason is used. Calls are temperature 0, seed 1, cached by request hash under `system/.llm-cache/`, and capped at 120 calls or 10 minutes. Set `RESOLVE_POLISH_REASONS=0` to keep the template wording.

@@ -4,13 +4,16 @@ dev/
 *.xlsx
 .env
 .env.*
+!.env.example
 *.key
 __pycache__/
 *.pyc
 .cache/
 .venv/
-*.jev.jsonl
+*.verify.jsonl
 ui/analyst_labels.jsonl
 docs/internal/
 data/internal/
 .omc/
+system/.llm-cache/
+output/.llm-cache/

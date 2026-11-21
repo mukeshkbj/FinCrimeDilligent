@@ -2289,6 +2289,21 @@ def combine(alert, hit, outcomes):
 
 
 
+def _maybe_polish(row, hit):
+    """Grok writes the reason wording. The decision and reason code are never changed here."""
+    try:
+        import llm
+    except ImportError:
+        return row
+    try:
+        polished = llm.polish_reason(row.get("reason"), row.get("decision"), row.get("reason_code"), hit.get("name"))
+    except Exception:
+        return row
+    if polished:
+        row["reason"] = polished
+    return row
+
+
 def resolve_hit(store, hit):
     alert = store.alerts.get(hit["alert_id"])
     if alert is None:
@@ -2297,7 +2312,7 @@ def resolve_hit(store, hit):
     seeds = resolve_seeds(store, alert, screened)
     groups = person_groups(store, seeds)
     outcomes = [decide_person(store, alert, hit, seed, group, screened) for seed, group in groups]
-    return combine(alert, hit, outcomes)
+    return _maybe_polish(combine(alert, hit, outcomes), hit)
 
 
 def _second_dob(year, month, day, hit_dates):
@@ -2448,7 +2463,7 @@ def _failsafe(hit):
 
 
 def _write_rows(output_path, hits, answered, logs):
-    side = str(output_path) + ".jev.jsonl" if not str(output_path).endswith(".jsonl") else str(output_path)[:-6] + ".jev.jsonl"
+    side = str(output_path) + ".verify.jsonl" if not str(output_path).endswith(".jsonl") else str(output_path)[:-6] + ".verify.jsonl"
     counts = defaultdict(int)
     with open(output_path, "w", encoding="utf-8") as handle, open(side, "w", encoding="utf-8") as jev_handle:
         for hit in hits:
