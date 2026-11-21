@@ -34,12 +34,12 @@ on right decisions: reason code 100%, customer record 100%
 To build, run, and score the holdout set:
 
 ```bash
-python3 dev/make_unseen.py dev holdout
-system/run holdout output/holdout_cases.jsonl
-python3 validate.py --data holdout --output output/holdout_cases.jsonl --score holdout/holdout_cases.jsonl
+python3 tools/make_unseen.py dev holdout
+system/run holdout holdout/predictions.jsonl
+python3 validate.py --data holdout --output holdout/predictions.jsonl --score holdout/holdout_cases.jsonl
 ```
 
-`make_unseen.py` builds a full data room under `holdout/` (dev plus synthetic hits). Run against that room, then score with its labels. Do not use `--data dev` with `dev/holdout_cases.jsonl` — those hit ids are not in the base room, so validate reports "you said nothing". Do not commit `holdout/`.
+`tools/make_unseen.py` (standard library, seed 2026) builds a full data room under `holdout/`: the dev room plus 228 new hits in 76 situations whose answers come from POLICY.md alone, including cases the dev set barely has (deceased hits, type mismatches, merged records, rejected checks, ages written several ways). Latest result: 225 of 228 right, 0 unsafe clearances, decision score 98.0. The 3 left are same-year dates where both numbers are 12 or under, which we send to review on purpose. Run against that room, then score with its labels. Do not use `--data dev` with `dev/holdout_cases.jsonl` — those hit ids are not in the base room, so validate reports "you said nothing". Do not commit `holdout/`.
 
 ```bash
 python3 ui/serve.py dev output/dev.jsonl
@@ -65,9 +65,9 @@ Open `http://127.0.0.1:8765/?hit=H-2808BE` (or the other ids; use the port print
 ```bash
 system/run <data_dir> <output_file>
 python3 validate.py --data <data_dir> --output <output_file> --score <data_dir>/practice_labels.jsonl
-python3 dev/make_unseen.py dev holdout
-system/run holdout output/holdout_cases.jsonl
-python3 validate.py --data holdout --output output/holdout_cases.jsonl --score holdout/holdout_cases.jsonl
+python3 tools/make_unseen.py dev holdout
+system/run holdout holdout/predictions.jsonl
+python3 validate.py --data holdout --output holdout/predictions.jsonl --score holdout/holdout_cases.jsonl
 python3 ui/serve.py <data_dir> <output_file> [port]
 ```
 
