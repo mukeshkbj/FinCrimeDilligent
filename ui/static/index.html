@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="js">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -8,6 +8,16 @@
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
+  <div class="intro" id="intro" hidden>
+    <div class="intro-panel intro-panel--top"></div>
+    <div class="intro-panel intro-panel--bottom"></div>
+    <div class="intro-grid" aria-hidden="true"></div>
+    <div class="intro-specks" id="intro-specks" aria-hidden="true"></div>
+    <p class="intro-tag intro-tag--tl">NAMESAKE · PRACTICE FILE</p>
+    <p class="intro-tag intro-tag--br">LOADING THE ROOM<span class="blink">_</span></p>
+    <p class="intro-count" aria-live="polite"><span id="intro-num">00</span><i>%</i></p>
+  </div>
+
   <header class="shell">
     <div class="shell-brand">
       <h1 id="app-name">Namesake</h1>
@@ -44,6 +54,9 @@
         <span class="playback-status" id="step-count"></span>
       </div>
       <div class="timeline" id="timeline" role="tablist" aria-label="Story timeline"></div>
+      <div class="story-progress" aria-hidden="true">
+        <div class="story-progress-bar" id="story-progress-bar"></div>
+      </div>
       <div class="rail" id="rail" hidden aria-hidden="true"></div>
     </section>
 
