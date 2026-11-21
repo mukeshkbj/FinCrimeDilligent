@@ -254,7 +254,8 @@ function renderTimeline() {
     const current = index === state.index ? ' aria-current="true"' : "";
     const kind = outcomeClass((step.simple && step.simple.outcome) || "");
     const title = (step.simple && step.simple.plain_code) || step.title;
-    return `<button type="button" class="timeline-chip ${kind}" data-step="${index}"${current} title="${esc(step.id)} ${esc(title)}">${esc(step.id)}${star}</button>`;
+    const short = String(step.id || "").replace(/^H-/, "");
+    return `<button type="button" class="timeline-chip ${kind}" data-step="${index}"${current} title="${esc(step.id)} · ${esc(title)}">${esc(short)}${star}</button>`;
   }).join("");
   host.querySelectorAll("button").forEach((button) => {
     button.onclick = () => goTo(Number(button.dataset.step), { manual: true });
@@ -310,7 +311,11 @@ function renderWorkflow(flow) {
     } else {
       body = `<dl>${linesHtml(stage.lines)}</dl>`;
     }
-    const arrow = index === 0 ? "" : '<div class="stage-arrow" aria-hidden="true">→</div>';
+    const arrow = index === 0 ? "" : `<div class="stage-arrow" aria-hidden="true" title="Next stage">
+      <svg viewBox="0 0 24 24" width="26" height="26" focusable="false" aria-hidden="true">
+        <path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>`;
     const tint = stage.key ? ` stage-${esc(stage.key)}` : "";
     return `${arrow}<article class="stage${tint}"><h3><span class="n">${stage.n}</span> ${esc(stage.title)}</h3>${body}</article>`;
   }).join("");
@@ -327,9 +332,9 @@ function renderStep() {
   const step = state.steps[state.index];
   if (!step) return;
   renderRail();
-  const simple = step.simple;
-  const detailed = step.detailed;
-  renderWorkflow(detailed && detailed.workflow);
+  const simple = step.simple || {};
+  const detailed = step.detailed || {};
+  renderWorkflow(detailed.workflow);
   const initials = (simple.screened_name || "?").split(" ").map((part) => part[0]).join("").slice(0, 2);
   const memo = (detailed && detailed.memo) || (detailed && detailed.workflow && detailed.workflow.memo);
   const draftAvailable = detailed && detailed.draft_available;

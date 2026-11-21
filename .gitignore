@@ -19,3 +19,4 @@ data/internal/
 system/.llm-cache/
 output/.llm-cache/
 .claude/
+.cursor/
