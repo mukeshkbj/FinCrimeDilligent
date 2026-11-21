@@ -61,20 +61,32 @@
     <div class="bar" id="bar" role="img" aria-label="Decision totals"></div>
   </div>
 
+  <div class="story-bar" aria-label="Demo playback">
+    <div class="playback">
+      <button type="button" id="play" class="btn-autoplay" aria-pressed="false">Autoplay full story</button>
+      <div class="speed" role="group" aria-label="Playback speed">
+        <button type="button" data-speed="0.5">0.5x</button>
+        <button type="button" data-speed="1" aria-pressed="true">1x</button>
+        <button type="button" data-speed="2">2x</button>
+      </div>
+      <div class="mode-group" role="group" aria-label="Playback mode">
+        <button type="button" id="mode-auto" data-mode="auto">Auto</button>
+        <button type="button" id="mode-step" data-mode="step" aria-pressed="true">Step</button>
+        <button type="button" id="reset">Reset</button>
+      </div>
+      <button type="button" id="back" class="ghost">Step back</button>
+      <button type="button" id="next" class="ghost">Step forward</button>
+      <button type="button" id="replay" class="btn-replay">Replay</button>
+      <span class="playback-status" id="step-count"></span>
+    </div>
+    <div class="timeline" id="timeline" role="tablist" aria-label="Story timeline"></div>
+    <div class="rail" id="rail" hidden aria-hidden="true"></div>
+  </div>
+
   <div class="tabs" role="tablist">
     <button type="button" role="tab" id="tab-workflow" aria-controls="panel-workflow" aria-selected="true">Workflow</button>
     <button type="button" role="tab" id="tab-simple" aria-controls="panel-simple" aria-selected="false">Simple</button>
     <button type="button" role="tab" id="tab-detailed" aria-controls="panel-detailed" aria-selected="false">Detailed</button>
-  </div>
-
-  <div class="story-bar">
-    <div class="rail" id="rail" role="tablist" aria-label="Story steps"></div>
-    <div class="rail-actions">
-      <button type="button" id="back">Back</button>
-      <button type="button" id="next" class="primary">Next step</button>
-      <button type="button" id="play" class="demo">Demo: play the story</button>
-      <span id="step-count"></span>
-    </div>
   </div>
 
   <div class="layout">
