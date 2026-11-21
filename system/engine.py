@@ -771,6 +771,8 @@ _WORD_ONES = {
 }
 _WORD_TENS = {"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90}
 AGE_COMMA_RE = re.compile(r",\s*(\d{1,3})\s*,")
+# "Helena Dorankova (47) was questioned ... in August 1995": an age in brackets right after a name.
+AGE_PAREN_RE = re.compile(r"[A-Z][\w'\-]+\s*\((\d{2,3})\)")
 REPORT_RE = re.compile(
     rf"According to [^;\n]+;\s+({MON})\s+(?:(\d{{1,2}}),\s+)?(\d{{4}})\s*:",
     re.I,
@@ -954,6 +956,10 @@ def ages_in_text(text):
         for match in AGE_COMMA_RE.finditer(chunk):
             age = int(match.group(1))
             if 1 <= age <= 120:
+                ages.append(age)
+        for match in AGE_PAREN_RE.finditer(chunk):
+            age = int(match.group(1))
+            if 10 <= age <= 110:
                 ages.append(age)
         if not ages:
             continue
@@ -2718,6 +2724,9 @@ def self_test():
         assert len(name_parts("NA", False)) < 2
     years = ages_in_text("November 1998 saw Elvira Velasco Morillo, a 30-year-old, face charges.")
     assert years == [1967, 1968], years
+    years = ages_in_text("Helena Dorankova (47) was questioned by investigators in August 1995.")
+    assert years == [1947, 1948], years
+    assert ages_in_text("The ruling (2019) was appealed in May 2020.") == []
     assert ages_in_text("November 1981 marked the date Pere Punti, then 37, was placed under charge.") == [1943, 1944]
     assert ages_in_text("Pere Punti reached 37 years of age by November 1981, the time he was charged.") == [1943, 1944]
     assert ages_in_text("Aged 45 at the time of the March 2019 report.") == [1973, 1974]
