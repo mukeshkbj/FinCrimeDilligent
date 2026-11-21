@@ -357,7 +357,12 @@ def _list_dob(reason, hit):
     return ""
 
 
-def _name_mark(reason, code):
+def _name_mark(reason, code, name_agree=None):
+    """Prefer the engine's name_agree flag; fall back to the reason text."""
+    if name_agree is True:
+        return "matches"
+    if name_agree is False and code == "NAME_MISMATCH_VERIFIED":
+        return "clashes"
     low = (reason or "").lower()
     if "not cleared on name" in low or "may transliterate" in low or "could be transliterations" in low:
         return "missing"
@@ -367,23 +372,54 @@ def _name_mark(reason, code):
         return "matches"
     if code in ("NAME_DOB_MATCH", "NAME_DOB_LOCATION_MATCH", "NAME_LOCATION_MATCH"):
         return "matches"
+    if name_agree is False:
+        return "clashes"
     return None
 
 
-def _dob_mark(reason, code, customer_value, list_value):
+def _dob_mark(reason, code, customer_value, list_value, dob_agree=None):
     low = (reason or "").lower()
-    if "cannot be compared" in low or "not on the list entry" in low or "cannot be settled" in low or "no date of birth" in low:
+    list_missing = not list_value or list_value == NA or "not available" in str(list_value).lower()
+    if list_missing or "cannot be compared" in low or "not on the list entry" in low or "cannot be settled" in low or "no date of birth" in low:
         return "missing"
-    if "agrees with hit dob" in low or re.search(r"date of birth[^.]*agrees with the hit", low) or code in ("NAME_DOB_MATCH", "NAME_DOB_LOCATION_MATCH"):
+    if dob_agree is True or "agrees with hit dob" in low or re.search(r"date of birth[^.]*agrees with the hit", low) or code in ("NAME_DOB_MATCH", "NAME_DOB_LOCATION_MATCH"):
         return "matches"
-    if code in ("DOB_MISMATCH", "TEMPORAL_IMPOSSIBILITY") or "contradict" in low or "under 16" in low:
+    # Age-at-report is shown on its own Time row; DOB itself is not a clash.
+    if code == "TEMPORAL_IMPOSSIBILITY":
+        return "missing" if list_missing else "matches" if dob_agree else "missing"
+    if code == "DOB_MISMATCH" or "contradict" in low:
         return "clashes"
     if not customer_value or not list_value:
         return "missing"
     return "missing"
 
 
-def _compare(desk, reason, code, hit, list_name, group, latest, customer, fallback_name=""):
+def _time_row(reason, code):
+    if code != "TEMPORAL_IMPOSSIBILITY":
+        return None
+    match = re.search(
+        r"at most (\d+) on (\d{4}-\d{2}-\d{2}).*under 16",
+        reason or "",
+        re.I,
+    )
+    if match:
+        age, when = match.group(1), match.group(2)
+        return {
+            "field": "Time",
+            "customer": f"{age} at the {when} report",
+            "list": "under 16",
+            "mark": "clashes",
+        }
+    return {
+        "field": "Time",
+        "customer": "too young at the report",
+        "list": "under 16",
+        "mark": "clashes",
+    }
+
+
+def _compare(desk, reason, code, hit, list_name, group, latest, customer, fallback_name="", flags=None):
+    flags = flags or {}
     verified = re.search(r"[Vv]erified name ([^(]+?) \(", reason or "")
     on_file = re.search(r"customer name on file is ([^.]+)", reason or "", re.I)
     if verified:
@@ -408,10 +444,10 @@ def _compare(desk, reason, code, hit, list_name, group, latest, customer, fallba
     else:
         customer_dob = ""
     list_dob = _list_dob(reason, hit)
-    name_mark = _name_mark(reason, code)
+    name_mark = _name_mark(reason, code, flags.get("name_agree"))
     if name_mark is None:
-        name_mark = "missing" if not customer_name or not list_name else "missing"
-    dob_mark = _dob_mark(reason, code, customer_dob, list_dob)
+        name_mark = "missing"
+    dob_mark = _dob_mark(reason, code, customer_dob, list_dob, flags.get("dob_agree"))
     both = re.search(r"Shared country ([A-Z][^.(;]{0,48}?)(?: in | \()", reason or "") or re.search(
         r"Both the customer and the hit are linked to ([^.]+)", reason or ""
     )
@@ -459,6 +495,9 @@ def _compare(desk, reason, code, hit, list_name, group, latest, customer, fallba
         {"field": "Country", "customer": _or_na(customer_country), "list": _or_na(list_country), "mark": country_mark},
         {"field": "Type", "customer": _or_na(customer_type), "list": _or_na(list_type), "mark": type_mark},
     ]
+    time_row = _time_row(reason, code)
+    if time_row:
+        rows.append(time_row)
     low_reason = (reason or "").lower()
     if "not cleared on name" in low_reason or "may transliterate" in low_reason or "could be transliterations" in low_reason:
         clause = re.search(r".{0,220}not cleared on name", reason or "", re.I)
@@ -466,6 +505,96 @@ def _compare(desk, reason, code, hit, list_name, group, latest, customer, fallba
             note = clause.group(0).strip()
             rows[0]["note"] = note if note.endswith(".") else note + "."
     return rows
+
+
+def analyst_memo(desk, hit_id):
+    """One-page REVIEW memo from engine facts. No model."""
+    prepare(desk)
+    row = desk.output.get(hit_id) or {}
+    if row.get("decision") != "REVIEW":
+        return None
+    hit = desk.hits.get(hit_id) or {}
+    reason = row.get("reason") or ""
+    code = row.get("reason_code") or ""
+    evidence = list(row.get("evidence") or [])
+    log = (getattr(desk, "jev", {}) or {}).get(hit_id) or {}
+    flags = {
+        "name_agree": log.get("name_agree"),
+        "dob_agree": log.get("dob_agree"),
+    }
+    customer_id = row.get("customer_record_id")
+    customer = desk.customers.get(customer_id) if isinstance(customer_id, str) and customer_id.startswith("CUS-") else None
+    group = _expand(desk, customer_id) if customer else tuple()
+    latest = _identity(desk, group) if group else None
+    list_name = hit.get("name") or ""
+    compare = _compare(desk, reason, code, hit, list_name, group, latest, customer, flags=flags)
+    agrees = [f"{item['field']}: {item['customer']} · {item['list']}" for item in compare if item.get("mark") == "matches"]
+    clashes = [f"{item['field']}: {item['customer']} · {item['list']}" for item in compare if item.get("mark") == "clashes"]
+    missing = [f"{item['field']}: {item['customer']} · {item['list']}" for item in compare if item.get("mark") == "missing"]
+    if not (hit.get("dobs") or []):
+        missing.append("The list profile has no date of birth in its date field.")
+    if customer_id == "AMBIGUOUS":
+        missing.append("More than one person fits the screened details.")
+        settle = "A full date of birth or a document number that picks one of those people."
+    elif not (hit.get("dobs") or []):
+        settle = "A listed date of birth for the hit would settle it."
+    else:
+        settle = "One more fact that either contradicts the list profile or agrees on name and date."
+    rejected = []
+    hit_countries = set(_hit_countries(desk, hit))
+    for result_id, result in sorted((getattr(desk, "search", {}) or {}).items()):
+        if result.get("hit_id") and result.get("hit_id") != hit_id:
+            continue
+        snippet = _text(result.get("snippet"))[:120]
+        query = _text(result.get("query"))
+        if not snippet and not query:
+            continue
+        if result_id in evidence:
+            continue
+        # Namesakes seen in search but not used as evidence.
+        if query and list_name and list_name.split(",")[0].split()[0].lower() in query.lower():
+            rejected.append({
+                "id": result_id,
+                "reason": "Namesake search result; not used because it did not supply a usable date for this listing.",
+            })
+        if len(rejected) >= 5:
+            break
+    sources = list(evidence)
+    lines = [
+        "Analyst memo",
+        "",
+        "What agrees",
+        *(agrees or ["Nothing firmly agrees yet."]),
+        "",
+        "What contradicts",
+        *(clashes or ["Nothing contradicts"]),
+        "",
+        "What's missing",
+        *(missing or ["Nothing obvious is missing from the compare stage."]),
+        "",
+        "The one document that would settle it",
+        settle,
+        "",
+        "Sources checked",
+        *(sources or ["No cited records."]),
+    ]
+    if rejected:
+        lines.append("")
+        lines.append("Search results seen and rejected as namesakes")
+        for item in rejected:
+            lines.append(f"{item['id']}: {item['reason']}")
+    text = "\n".join(lines)
+    return {
+        "title": "Analyst memo",
+        "agrees": agrees or ["Nothing firmly agrees yet."],
+        "contradicts": clashes or ["Nothing contradicts"],
+        "missing": missing or ["Nothing obvious is missing from the compare stage."],
+        "would_settle": settle,
+        "sources": sources,
+        "rejected": rejected,
+        "text": text,
+        "flags": flags,
+    }
 
 
 def build(desk, hit_id, display_name):
@@ -566,8 +695,13 @@ def build(desk, hit_id, display_name):
                 if name and name not in names:
                     names.append(name)
         fallback_name = "; ".join(names)
+    log = (getattr(desk, "jev", {}) or {}).get(hit_id) or {}
+    flags = {
+        "name_agree": log.get("name_agree"),
+        "dob_agree": log.get("dob_agree"),
+    }
     compare_rows = _compare(
-        desk, reason, code, hit, list_name, group, latest, customer, fallback_name
+        desk, reason, code, hit, list_name, group, latest, customer, fallback_name, flags=flags
     )
     stages = [
         {"key": "alert", "n": 1, "title": "Alert", "lines": alert_lines},
@@ -584,10 +718,13 @@ def build(desk, hit_id, display_name):
             "evidence": evidence or [],
         },
     ]
+    memo = analyst_memo(desk, hit_id) if decision == "REVIEW" else None
     return {
         "hit_id": hit_id,
         "list_name": list_name or NA,
         "decision": decision or NA,
         "reason_code": code or NA,
         "stages": stages,
+        "flags": flags,
+        "memo": memo,
     }

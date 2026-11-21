@@ -10,14 +10,13 @@ function esc(value) {
 
 function withChips(value) {
   const text = String(value ?? "");
-  const re = /\(((?:H|A|CUS|KYC|NOTE|SR|ACC|APP)-[0-9A-Za-z]+)([^)]*)\)/g;
+  const re = /\b((?:CUS|KYC|NOTE|SR|ACC|APP)-[0-9A-Za-z]+)\b/g;
   let html = "";
   let last = 0;
   let match;
   while ((match = re.exec(text))) {
     html += esc(text.slice(last, match.index));
-    const rest = match[2].replace(/^,\s*/, "").trim();
-    html += `<span class="chip">${esc(match[1])}${rest ? `<span class="chip-meta">${esc(rest)}</span>` : ""}</span>`;
+    html += `<button type="button" class="chip" data-record="${esc(match[1])}">${esc(match[1])}</button>`;
     last = match.index + match[0].length;
   }
   html += esc(text.slice(last));
@@ -25,15 +24,43 @@ function withChips(value) {
 }
 
 function chipId(id) {
-  return `<span class="chip">${esc(id)}</span>`;
+  return `<button type="button" class="chip" data-record="${esc(id)}">${esc(id)}</button>`;
 }
 
 function $(id) { return document.getElementById(id); }
 
 function outcomeClass(text) {
   if (text === "Cleared") return "cleared";
-  if (text === "Kept open") return "kept";
+  if (text === "Sent to compliance" || text === "Kept open") return "kept";
   return "review";
+}
+
+async function openRecord(recordId) {
+  const panel = $("record-panel");
+  if (!panel || !recordId) return;
+  try {
+    const body = await getJSON("/api/record/" + encodeURIComponent(recordId));
+    $("record-title").textContent = body.title || "What the auditor sees";
+    const rows = Object.entries(body.fields || {})
+      .filter(([, value]) => value !== null && value !== undefined && value !== "")
+      .map(([key, value]) => `<tr><th>${esc(key)}</th><td>${esc(typeof value === "object" ? JSON.stringify(value) : value)}</td></tr>`)
+      .join("");
+    $("record-fields").innerHTML = `<p class="meta">${esc(body.id)}</p><table>${rows || "<tr><td>No fields</td></tr>"}</table>`;
+    $("record-raw").textContent = JSON.stringify(body.raw || body.fields || {}, null, 2);
+    panel.hidden = false;
+  } catch (error) {
+    $("ticker").textContent = "That record could not be opened.";
+  }
+}
+
+function bindChips(root) {
+  if (!root) return;
+  root.querySelectorAll("[data-record]").forEach((button) => {
+    button.onclick = (event) => {
+      event.preventDefault();
+      openRecord(button.dataset.record);
+    };
+  });
 }
 
 async function getJSON(url) {
@@ -63,7 +90,7 @@ function renderFunnel(summary) {
   ];
   const outcomes = [
     ["cleared", funnel.cleared, "Cleared"],
-    ["kept", funnel.kept_open, "Kept open"],
+    ["kept", funnel.kept_open, "Sent to compliance"],
     ["review", funnel.review, "Sent to review"],
   ];
   const main = steps.map(([count, label]) =>
@@ -75,19 +102,58 @@ function renderFunnel(summary) {
   $("funnel-row").innerHTML = `${main}<span class="funnel-arrow" aria-hidden="true">→</span><div class="funnel-outcomes">${split}</div>`;
 }
 
+function renderMatchers(payload) {
+  const host = $("matchers-table");
+  const note = $("matchers-note");
+  if (!host || !payload || !payload.matchers) {
+    if (host) host.innerHTML = "";
+    if (note) note.textContent = "";
+    return;
+  }
+  const order = ["full", "plain", "novar"];
+  const rows = order.map((key) => {
+    const row = payload.matchers[key] || {};
+    return `<tr>
+      <td>${esc(row.title || key)}</td>
+      <td class="num">${esc(row.right)}/${esc(row.labels)}</td>
+      <td class="num">${esc(row.unsafe)}</td>
+      <td class="num">${esc(row.decision_score)}</td>
+    </tr>`;
+  }).join("");
+  host.innerHTML = `
+    <table>
+      <thead><tr><th>Matcher</th><th>Right</th><th>Unsafe clears</th><th>Score</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="matchers-examples" id="matchers-examples"></div>`;
+  note.textContent = payload.note || "";
+  const examples = (payload.matchers.plain && payload.matchers.plain.demo_examples) || [];
+  const box = $("matchers-examples");
+  if (!box) return;
+  box.innerHTML = examples.map((item) => {
+    const list = item.list_name || item.hit_id;
+    return `<button type="button" data-hit="${esc(item.hit_id)}">
+      ${esc(item.hit_id)} · ${esc(list)} became cleared under the plain fuzzy matcher
+    </button>`;
+  }).join("");
+  box.querySelectorAll("button").forEach((button) => {
+    button.onclick = () => openHit(button.dataset.hit);
+  });
+}
+
 function renderSummary(summary) {
   renderFunnel(summary);
-  const totals = summary.totals || {};
   const practice = summary.practice || {};
   const repro = summary.repro || {};
+  const reproLabel = repro.label || (repro.identical ? "5 of 5 runs identical" : "runs checked");
   const tiles = [
-    ["Hits", summary.hits],
-    ["Cleared", totals.DIFFERENT_ENTITY],
-    ["Kept open", totals.SAME_ENTITY],
-    ["Left for you", totals.REVIEW],
-    ["Practice score", practice.available ? practice.decision_score : "n/a"],
+    ["Decision score (practice)", practice.available ? practice.decision_score : "n/a"],
     ["Unsafe clears", practice.available ? practice.unsafe : "n/a"],
-    ["Five runs", repro.status === "done" ? (repro.identical ? "identical" : "differ") : repro.status || "waiting"],
+    ["False positives cleared", practice.available ? practice.false_positive_clears : "n/a"],
+    ["Clearance precision", practice.available ? `${practice.clearance_precision}%` : "n/a"],
+    ["Same-entity recall", practice.available ? `${practice.same_entity_recall}%` : "n/a"],
+    ["Review rate", practice.available ? `${practice.review_rate}%` : "n/a"],
+    [reproLabel, repro.status === "done" && repro.identical ? "yes" : (repro.status || "n/a")],
   ];
   $("kpis").innerHTML = tiles.map(([label, value]) => `<div class="kpi"><span>${label}</span><strong>${value}</strong></div>`).join("");
   const total = (summary.bar || []).reduce((sum, part) => sum + part.count, 0) || 1;
@@ -97,16 +163,14 @@ function renderSummary(summary) {
     const label = width > 12 ? `${part.name} ${part.count}` : "";
     return `<i class="${classes[index] || ""}" style="width:${width}%">${label}</i>`;
   }).join("");
-  if (repro.status === "running") {
-    setTimeout(() => getJSON("/api/summary").then(renderSummary).catch(() => {}), 4000);
-  }
 }
 
 function renderRail() {
   $("rail").innerHTML = state.steps.map((step, index) => {
     const star = step.wow ? '<span class="star"> ★</span>' : "";
     const current = index === state.index ? ' aria-current="true"' : "";
-    return `<button type="button" data-step="${index}"${current}>${step.id} ${step.title}${star}</button>`;
+    const title = (step.simple && step.simple.plain_code) || step.title;
+    return `<button type="button" data-step="${index}"${current}>${step.id} ${esc(title)}${star}</button>`;
   }).join("");
   $("rail").querySelectorAll("button").forEach((button) => {
     button.onclick = () => { state.index = Number(button.dataset.step); renderStep(); };
@@ -135,7 +199,7 @@ function renderWorkflow(flow) {
     return;
   }
   const decision = flow.decision || "";
-  const plain = decision === "DIFFERENT_ENTITY" ? "Cleared" : decision === "SAME_ENTITY" ? "Kept open" : decision === "REVIEW" ? "Sent to review" : decision;
+  const plain = decision === "DIFFERENT_ENTITY" ? "Cleared" : decision === "SAME_ENTITY" ? "Sent to compliance" : decision === "REVIEW" ? "Sent to review" : decision;
   const stages = flow.stages.map((stage, index) => {
     let body = "";
     if (stage.rows) {
@@ -150,10 +214,9 @@ function renderWorkflow(flow) {
     } else if (stage.key === "decision") {
       const ids = (stage.evidence || []).length ? stage.evidence.map(chipId).join(" ") : "not available";
       body = `
-        <p class="dec-word dec-${esc(stage.decision)}">${esc(stage.decision)}</p>
+        <p class="dec-word dec-${esc(stage.decision)}">${esc(plain)}</p>
         <dl>
-          <dt>Reason code</dt><dd>${esc(stage.reason_code)}</dd>
-          <dt>Reason</dt><dd class="reason">${withChips(stage.reason)}</dd>
+          <dt>Why</dt><dd class="reason">${withChips(stage.reason)}</dd>
           <dt>Evidence</dt><dd>${ids}</dd>
         </dl>`;
     } else {
@@ -164,10 +227,11 @@ function renderWorkflow(flow) {
   }).join("");
   panel.innerHTML = `
     <div class="wf-head">
-      <p class="card-kicker">${esc(flow.hit_id)} · ${esc(plain)}</p>
+      <p class="card-kicker">${esc(plain)}</p>
       <h2>${esc(flow.list_name || "")}</h2>
     </div>
     <div class="pipeline">${stages}</div>`;
+  bindChips(panel);
 }
 
 function renderStep() {
@@ -178,16 +242,70 @@ function renderStep() {
   const detailed = step.detailed;
   renderWorkflow(detailed && detailed.workflow);
   const initials = (simple.screened_name || "?").split(" ").map((part) => part[0]).join("").slice(0, 2);
+  const memo = (detailed && detailed.memo) || (detailed && detailed.workflow && detailed.workflow.memo);
+  const draftAvailable = detailed && detailed.draft_available;
+  const memoHtml = memo ? `
+      <section class="memo">
+        <h3>Analyst memo</h3>
+        <pre class="memo-text">${esc(memo.text)}</pre>
+        <div class="memo-actions">
+          <button type="button" id="copy-memo">Copy memo</button>
+          <button type="button" id="draft-memo" ${draftAvailable ? "" : "disabled"} title="${draftAvailable ? "Reword with Grok" : "Add OPENROUTER_API_KEY and restart"}">Draft wording</button>
+        </div>
+        <p class="meta" id="draft-label" hidden></p>
+        <pre class="memo-text" id="draft-text" hidden></pre>
+      </section>` : "";
   $("panel-simple").innerHTML = `
     <article class="card now">
       <p class="card-kicker">${initials} · ${simple.screened_on || ""} · ${simple.rule}${step.wow ? " · starred" : ""}</p>
-      <h2>${step.id} · ${step.title}</h2>
+      <h2>${step.id} · ${esc(simple.plain_code || step.title)}</h2>
       <p class="outcome ${outcomeClass(simple.outcome)}">${simple.outcome}</p>
-      <p><strong>What was asked.</strong> ${simple.asked}</p>
-      <p><strong>What happened.</strong> ${simple.happened}</p>
-      <p class="meta">${simple.screened_name || ""} was screened against ${simple.hit_name || "the list name"}.</p>
-      <p class="checked ${simple.passed ? "" : "fail"}">${simple.checked}</p>
+      <p><strong>What was asked.</strong> ${esc(simple.asked)}</p>
+      <p><strong>What happened.</strong> ${withChips(simple.happened)}</p>
+      <p class="meta">${esc(simple.screened_name || "")} was screened against ${esc(simple.hit_name || "the list name")}.</p>
+      <p class="checked ${simple.passed ? "" : "fail"}">${esc(simple.checked)}</p>
+      ${memoHtml}
     </article>`;
+  bindChips($("panel-simple"));
+  if (memo) {
+    const copy = $("copy-memo");
+    if (copy) {
+      copy.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(memo.text);
+          copy.textContent = "Copied";
+        } catch (error) {
+          copy.textContent = "Copy failed";
+        }
+      };
+    }
+    const draft = $("draft-memo");
+    if (draft && draftAvailable) {
+      draft.onclick = async () => {
+        draft.disabled = true;
+        draft.textContent = "Drafting…";
+        try {
+          const response = await fetch("/api/draft", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ hit_id: step.hit_id }),
+          });
+          const body = await response.json();
+          if (!body.ok) throw new Error(body.error || "draft failed");
+          $("draft-label").hidden = false;
+          $("draft-label").textContent = body.label;
+          $("draft-text").hidden = false;
+          $("draft-text").textContent = body.text;
+        } catch (error) {
+          $("draft-label").hidden = false;
+          $("draft-label").textContent = error.message || "Draft failed";
+        } finally {
+          draft.disabled = false;
+          draft.textContent = "Draft wording";
+        }
+      };
+    }
+  }
   const jev = detailed.jev || {};
   const jevLine = jev.judge
     ? `Judge ${jev.judge.decision} / ${jev.judge.reason_code}. Evaluate ${jev.evaluate.agrees ? "agrees" : "disagrees"}. Verify ${jev.verify.ok ? "ok" : "failed"}. ${jev.downgraded ? "Downgraded to review." : "Not downgraded."}`
@@ -260,7 +378,8 @@ async function openHit(hitId) {
       rule: "Your rules",
       asked: "Opened from the queue.",
       happened: body.row.reason,
-      outcome: body.row.decision === "DIFFERENT_ENTITY" ? "Cleared" : body.row.decision === "SAME_ENTITY" ? "Kept open" : "Left for you",
+      outcome: body.row.decision === "DIFFERENT_ENTITY" ? "Cleared" : body.row.decision === "SAME_ENTITY" ? "Sent to compliance" : "Left for you",
+      plain_code: body.row.reason_code,
       screened_name: "",
       screened_on: "",
       hit_name: "",
@@ -277,6 +396,8 @@ async function openHit(hitId) {
       brief: body.brief,
       trail: body.trail,
       jev: body.jev,
+      memo: body.memo,
+      draft_available: body.draft_available,
       model_note: "Model was not used to build this file.",
       confidence_note: "No confidence number is stored.",
       workflow: body.workflow,
@@ -312,6 +433,12 @@ async function start() {
   $("real-line").textContent = "Decisions: real recorded file. Records: real. Model: not used.";
   const summary = await getJSON("/api/summary");
   renderSummary(summary);
+  try {
+    const matchers = await getJSON("/static/matchers.json");
+    renderMatchers(matchers);
+  } catch (error) {
+    renderMatchers(null);
+  }
   const journey = await getJSON("/api/journey");
   state.steps = journey.steps;
   state.index = 1;
@@ -354,6 +481,9 @@ async function start() {
     const button = event.target.closest("button");
     if (button && button.dataset.hit) openHit(button.dataset.hit);
   });
+  const close = $("record-close");
+  if (close) close.onclick = () => { $("record-panel").hidden = true; };
+  $("ticker").textContent = "Showing the recorded decisions. Nothing on this page changes the scored file.";
   loadQueue("review");
 }
 

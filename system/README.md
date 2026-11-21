@@ -23,7 +23,7 @@ Names are compared after NFKC, casefold, and stripping diacritics. Cyrillic, Gre
 
 The rules then clear on a contradiction (type, death, age under 16, date of birth, verified name, or location), confirm a person on name plus date of birth, or a company on name plus country, and leave everything else as `REVIEW`. A country clash does not clear a hit whose name and date already agree.
 
-Evidence is the ids of the records that decided the hit, and every reason quotes the value with that id. A reason is one or two sentences. Output order is `hit_id`. Sets are sorted before they affect a choice, so two runs write the same file.
+**evidence = the records that decided the hit, never the hit itself.** Every reason should name those records and the fact each gave. A reason is 2–4 sentences. Output order is `hit_id`. Sets are sorted before they affect a choice, so two runs write the same file.
 
 ## How to run
 
@@ -36,9 +36,25 @@ Python 3 standard library only. A development run of 819 hits takes about 4 seco
 
 ## Three cases
 
-**Clear mismatch, `H-D861DA`.** Michael Earl Tilley was screened against `Tilley, Michael Earl`. The identity note `NOTE-8548C1` gives the customer date of birth 1979-11-08. The hit has no `dobs` field. The first paragraph of the profile says he was 46 when questioned in January 2023, so the listed person was born in 1976 or 1977. Every one of those years is more than a year away from 1979, which is `DOB_MISMATCH`. The note is the only cited record.
+**Clear mismatch, `H-D861DA`.** Michael Earl Tilley was screened against `Tilley, Michael Earl`. The identity note `NOTE-8548C1` gives the customer date of birth 1979-11-08. The hit has no `dobs` field. The first paragraph of the profile says he was 46 when questioned in January 2023, so the listed person was born in 1976 or 1977. Every one of those years is more than a year away from 1979, which is `DOB_MISMATCH`. Evidence: `NOTE-8548C1`.
 
-**Match, `H-582410`.** Elvira Velasco Morillo shares account `ACC-C4CA34` with another holder. The screened name and date of birth select `CUS-377745`. Note `NOTE-14E25A` verifies the date 1968-03-05 and a Spanish passport. The profile's first paragraph says she was a 30-year-old in November 1998, so the hit was born in 1967 or 1968. The year agrees, both sides are Spain, and the name agrees, so the decision is `NAME_DOB_LOCATION_MATCH`.
+**Match, `H-582410`.** Elvira Velasco Morillo shares account `ACC-C4CA34` with another holder. The screened name and date of birth select `CUS-377745`. Note `NOTE-14E25A` verifies the date 1968-03-05 and a Spanish passport. The profile's first paragraph says she was a 30-year-old in November 1998, so the hit was born in 1967 or 1968. The year agrees, both sides are Spain, and the name agrees, so the decision is `NAME_DOB_LOCATION_MATCH`. Evidence: `CUS-377745`, `NOTE-14E25A`.
 
-**Left for review, `H-FF3096`.** Abdul Rahman Yasin matches the hit's name, and a note says the customer lived in the United States, which is the hit's country. The hit has no date of birth, no age in the first paragraph, and no qualifying search result, so the customer date cannot be compared. A listed date of birth for the hit would settle it. The decision is `REVIEW` / `INSUFFICIENT_DATA`, citing only `NOTE-10AEAB`. The customer record's Australia residence is not cited, because that country is not what decided the hit.
+**Left for review, `H-FF3096`.** Abdul Rahman Yasin matches the hit's name, and a note says the customer lived in the United States, which is the hit's country. The hit has no date of birth, no age in the first paragraph, and no qualifying search result, so the customer date cannot be compared. A listed date of birth for the hit would settle it. The decision is `REVIEW` / `INSUFFICIENT_DATA`. Evidence: `NOTE-10AEAB`.
+
+## Why not just fuzzy match?
+
+`python3 tools/compare_matchers.py` scores three matchers on the same room:
+
+| Matcher | Right | Unsafe clears | Score |
+|---|---|---|---|
+| Our matcher | 50/50 | 0 | 100 |
+| Plain fuzzy matcher (whole-name similarity ≥ 85%) | 47/50 | 3 | 0 |
+| Without name variants | 50/50 | 0 | 100 |
+
+The plain fuzzy matcher is one we built for comparison. It changes 145 of 819 decisions (mostly unsafe clears). Transliteration alone changes one hit (`H-B47A06`) when variants are off.
+
+## Known limits
+
+We leave a hit for review when the files do not settle it: no list date of birth, a same-year month/day clash on an unverified customer date, more than one person fitting the alert, or a country clash after name and date already agree. A bad clear costs far more than a review, so the engine prefers `REVIEW` over a guess.
 

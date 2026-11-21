@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Screening desk</title>
+  <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
@@ -45,6 +46,12 @@
   <section class="funnel" id="funnel" aria-label="Hit funnel">
     <p class="bar-label">From the output file</p>
     <div class="funnel-row" id="funnel-row"></div>
+  </section>
+
+  <section class="matchers" id="matchers" aria-label="Why not just fuzzy match?">
+    <h2 class="bar-label">Why not just fuzzy match?</h2>
+    <div id="matchers-table"></div>
+    <p class="matchers-note" id="matchers-note"></p>
   </section>
 
   <section class="kpis" id="kpis" aria-label="Run totals"></section>
@@ -90,10 +97,24 @@
       <button type="button" data-filter="review" class="primary">Left for you</button>
       <button type="button" data-filter="review_name_dob">Left for you, name and date agree</button>
       <button type="button" data-filter="cleared">Cleared</button>
-      <button type="button" data-filter="kept">Kept open</button>
+      <button type="button" data-filter="kept">Sent to compliance</button>
     </div>
     <div class="queue" id="queue"></div>
   </section>
+
+  <aside class="record-panel" id="record-panel" hidden>
+    <div class="record-panel-inner">
+      <header>
+        <h2 id="record-title">What the auditor sees</h2>
+        <button type="button" id="record-close">Close</button>
+      </header>
+      <div id="record-fields"></div>
+      <details id="record-raw-wrap">
+        <summary>Raw JSON</summary>
+        <pre id="record-raw"></pre>
+      </details>
+    </div>
+  </aside>
 
   <script src="/static/app.js"></script>
 </body>

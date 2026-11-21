@@ -6,6 +6,11 @@ produced by system/run. This process never decides a hit.
 
 Usage:
     python3 ui/serve.py <data_dir> <output_file> [port]
+
+Prints one line you can open, for example:
+    screening desk on http://127.0.0.1:8765/
+It does not open a browser. If that port is already taken on localhost, it exits
+with an error instead of binding a different interface that would confuse you.
 """
 
 from __future__ import annotations
@@ -13,10 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import subprocess
 import sys
-import tempfile
-import threading
 import unicodedata
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -26,77 +28,89 @@ import workflow
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = Path(__file__).resolve().parent / "static"
-ENGINE = ROOT / "system" / "engine.py"
 
 # Fixed story. Titles are for the analyst. Outcomes come from the output file.
 STORY = [
     {
         "id": "S1",
-        "hit_id": "H-2808BE",
-        "title": "The passport is someone else",
+        "hit_id": "H-582410",
+        "title": "Elvira Velasco Morillo",
         "wow": False,
         "rule": "Your rules §4",
-        "asked": "A typed name matches a person on a list. You need the name on the passport.",
-        "expect_decision": "DIFFERENT_ENTITY",
-        "expect_code": "NAME_MISMATCH_VERIFIED",
-        "checked_ok": "Checked: the passport name, not the name that was typed, decided this.",
-        "checked_bad": "Something here does not add up. Look before you clear it.",
+        "asked": "A joint account holder looks like a listed person. Does the verified date and country agree?",
+        "expect_decision": "SAME_ENTITY",
+        "expect_code": "NAME_DOB_LOCATION_MATCH",
+        "checked_ok": "Checked: name, date and country agree, so this was sent to compliance.",
+        "checked_bad": "Something here does not add up. Look before you send it on.",
     },
     {
         "id": "S2",
-        "hit_id": "H-80B4B5",
-        "title": "The old date of birth was wrong",
-        "wow": True,
-        "rule": "Your rules §4",
-        "asked": "The customer file has one date of birth. A later identity note has another. A real match must not be cleared on the old date.",
+        "hit_id": "H-02115F",
+        "title": "Pescanova",
+        "wow": False,
+        "rule": "Your rules §5",
+        "asked": "A company name and country look like a listed company. Is it the same entity?",
         "expect_decision": "SAME_ENTITY",
-        "expect_code": "NAME_DOB_LOCATION_MATCH",
-        "checked_ok": "Checked: the verified date was used, so a real match was not cleared.",
-        "checked_bad": "Something here does not add up. The verified date did not decide this.",
+        "expect_code": "NAME_LOCATION_MATCH",
+        "checked_ok": "Checked: company name and country agree, so this was sent to compliance.",
+        "checked_bad": "Something here does not add up. Look before you send it on.",
     },
     {
         "id": "S3",
-        "hit_id": "H-8E4EC8",
-        "title": "They are not in the same country",
-        "wow": False,
-        "rule": "Your rules §6",
-        "asked": "The names are close. The countries are not, and there is no shared date of birth to hold the hit.",
+        "hit_id": "H-13E1CF",
+        "title": "Too young at the report",
+        "wow": True,
+        "rule": "Your rules §3",
+        "asked": "Two records merge into one person born in 2007. A 2020 report names someone who would have been 13.",
         "expect_decision": "DIFFERENT_ENTITY",
-        "expect_code": "LOCATION_MISMATCH",
-        "checked_ok": "Checked: no country is shared, and name plus date of birth do not already agree.",
+        "expect_code": "TEMPORAL_IMPOSSIBILITY",
+        "checked_ok": "Checked: under 16 at the report, so this hit was cleared.",
         "checked_bad": "Something here does not add up. Look before you clear it.",
     },
     {
         "id": "S4",
-        "hit_id": "H-FF3096",
-        "title": "Not enough to clear or keep",
+        "hit_id": "H-D861DA",
+        "title": "Cleared on date of birth",
         "wow": False,
-        "rule": "Your rules §10",
-        "asked": "The name and the country agree. There is no date of birth to compare.",
-        "expect_decision": "REVIEW",
-        "expect_code": "INSUFFICIENT_DATA",
-        "checked_ok": "Checked: nothing uncertain was cleared.",
-        "checked_bad": "Something here does not add up. An uncertain hit was not left for you.",
+        "rule": "Your rules §4",
+        "asked": "The profile age implies a birth year that does not match the customer file.",
+        "expect_decision": "DIFFERENT_ENTITY",
+        "expect_code": "DOB_MISMATCH",
+        "checked_ok": "Checked: the dates contradict, so this hit was cleared.",
+        "checked_bad": "Something here does not add up. Look before you clear it.",
     },
     {
         "id": "S5",
-        "hit_id": "H-6C7985",
-        "title": "Two people fit this alert",
+        "hit_id": "H-FF3096",
+        "title": "Waits for an analyst",
         "wow": False,
         "rule": "Your rules §10",
-        "asked": "More than one person in the files fits the screened name, year and country.",
+        "asked": "The name and country agree. There is no date of birth on the list to compare.",
         "expect_decision": "REVIEW",
         "expect_code": "INSUFFICIENT_DATA",
-        "expect_customer": "AMBIGUOUS",
-        "checked_ok": "Checked: both people were left for you, and the customer is marked ambiguous.",
-        "checked_bad": "Something here does not add up. Look before you pick a person.",
+        "checked_ok": "Checked: nothing uncertain was cleared. The memo is ready for an analyst.",
+        "checked_bad": "Something here does not add up. An uncertain hit was not left for you.",
     },
 ]
 
 PLAIN = {
     "DIFFERENT_ENTITY": "Cleared",
-    "SAME_ENTITY": "Kept open",
+    "SAME_ENTITY": "Sent to compliance",
     "REVIEW": "Left for you",
+}
+
+PLAIN_CODE = {
+    "TEMPORAL_IMPOSSIBILITY": "Too young at the report",
+    "DOB_MISMATCH": "Dates do not match",
+    "LOCATION_MISMATCH": "Countries do not match",
+    "NAME_MISMATCH_VERIFIED": "Verified name does not match",
+    "ENTITY_TYPE_MISMATCH": "Person and company clash",
+    "DECEASED": "Listed person had died",
+    "NAME_DOB_LOCATION_MATCH": "Name, date and country agree",
+    "NAME_DOB_MATCH": "Name and date agree",
+    "NAME_LOCATION_MATCH": "Name and country agree",
+    "INSUFFICIENT_DATA": "Not enough to settle",
+    "AMBIGUOUS_CUSTOMER_RECORD": "More than one person fits",
 }
 
 COST = {
@@ -177,37 +191,26 @@ class Desk:
         self.labels_out = ROOT / "ui" / "analyst_labels.jsonl"
         digest = hashlib.sha256(output_path.read_bytes()).hexdigest()[:12]
         self.run_id = "recorded-" + digest
-        self.repro = {"status": "running", "identical": None, "runs": 0}
+        self.repro = self._load_repro()
+        self.openrouter_key = bool(os.environ.get("OPENROUTER_API_KEY"))
         workflow.prepare(self)
-        threading.Thread(target=self._repro, daemon=True).start()
 
-    def _decision_key(self, path):
-        parts = []
-        for row in read_jsonl(path):
-            parts.append(row["hit_id"] + "|" + row["decision"] + "|" + row["reason_code"])
-        return hashlib.sha256("\n".join(parts).encode()).hexdigest()
-
-    def _repro(self):
-        hashes = []
+    def _load_repro(self):
+        path = ROOT / "ui" / "static" / "repro.json"
+        if not path.is_file():
+            return {"status": "missing", "identical": None, "runs": 0, "label": "Run tools/repro_check.py"}
         try:
-            for _ in range(5):
-                handle = tempfile.NamedTemporaryFile(prefix="screen-", suffix=".jsonl", delete=False)
-                handle.close()
-                subprocess.check_call(
-                    [sys.executable, str(ENGINE), str(self.data_dir), handle.name],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                hashes.append(self._decision_key(Path(handle.name)))
-                os.unlink(handle.name)
-            self.repro = {
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            identical = bool(payload.get("identical"))
+            runs = int(payload.get("runs") or 0)
+            return {
                 "status": "done",
-                "identical": len(set(hashes)) == 1,
-                "runs": 5,
-                "scope": "decision and reason code",
+                "identical": identical,
+                "runs": runs,
+                "label": "5 of 5 runs identical" if identical and runs >= 5 else f"{runs} runs checked",
             }
         except Exception as error:
-            self.repro = {"status": "failed", "identical": False, "runs": len(hashes), "error": str(error)}
+            return {"status": "failed", "identical": False, "runs": 0, "error": str(error)}
 
     def counts(self):
         totals = {"DIFFERENT_ENTITY": 0, "SAME_ENTITY": 0, "REVIEW": 0}
@@ -222,6 +225,11 @@ class Desk:
         baseline = 0
         right = 0
         unsafe = 0
+        false_positive_clears = 0
+        cleared_true = 0
+        cleared_said = 0
+        same_true = 0
+        same_caught = 0
         for label in self.labels.values():
             answer = self.output.get(label["hit_id"], {})
             said = answer.get("decision", "REVIEW")
@@ -232,13 +240,85 @@ class Desk:
                 right += 1
             if truth != "DIFFERENT_ENTITY" and said == "DIFFERENT_ENTITY":
                 unsafe += 1
+            if said == "DIFFERENT_ENTITY" and truth != "DIFFERENT_ENTITY":
+                false_positive_clears += 1
+            if said == "DIFFERENT_ENTITY" and truth == "DIFFERENT_ENTITY":
+                cleared_said += 1
+            if truth == "SAME_ENTITY":
+                same_true += 1
+                if said == "SAME_ENTITY":
+                    same_caught += 1
+        review_rate = 0.0
+        totals = self.counts()
+        if sum(totals.values()):
+            review_rate = 100.0 * totals.get("REVIEW", 0) / sum(totals.values())
         score = 100 * max(0.0, 1 - cost / baseline) if baseline else 0
+        practice_clears = cleared_said + false_positive_clears
+        clearance_precision = (
+            100.0 * cleared_said / practice_clears if practice_clears else 100.0
+        )
+        same_recall = 100.0 * same_caught / same_true if same_true else 0.0
         return {
             "available": True,
             "labels": len(self.labels),
             "right": right,
             "unsafe": unsafe,
             "decision_score": round(score, 1),
+            "false_positive_clears": false_positive_clears,
+            "clearance_precision": round(clearance_precision, 1),
+            "same_entity_recall": round(same_recall, 1),
+            "review_rate": round(review_rate, 1),
+        }
+
+    def draft_wording(self, hit_id):
+        """Optional Grok reword of the memo. Numbers and IDs stay from the engine."""
+        key = os.environ.get("OPENROUTER_API_KEY")
+        if not key:
+            return {
+                "ok": False,
+                "error": "Add OPENROUTER_API_KEY and restart",
+                "disabled": True,
+            }
+        memo = workflow.analyst_memo(self, hit_id)
+        if not memo:
+            return {"ok": False, "error": "Memo is only for REVIEW hits"}
+        # Stdlib HTTP only — never imported from system/.
+        import urllib.request
+
+        body = {
+            "model": "x-ai/grok-4.3",
+            "temperature": 0,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Rewrite the analyst memo in clear English. Keep every record id, "
+                        "date and number exactly as given. Do not add facts. 2 to 4 short paragraphs."
+                    ),
+                },
+                {"role": "user", "content": memo["text"]},
+            ],
+        }
+        request = urllib.request.Request(
+            "https://openrouter.ai/api/v1/chat/completions",
+            data=json.dumps(body).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            text = payload["choices"][0]["message"]["content"].strip()
+        except Exception as error:
+            return {"ok": False, "error": str(error)}
+        return {
+            "ok": True,
+            "label": "Draft wording by Grok · facts from the engine",
+            "text": text,
+            "facts": memo,
         }
 
     def evidence_fields(self, evidence_id):
@@ -341,6 +421,7 @@ class Desk:
                 "hit_name": _display_name(hit),
                 "happened": row.get("reason"),
                 "outcome": PLAIN.get(decision, decision),
+                "plain_code": PLAIN_CODE.get(code, code),
                 "checked": spec["checked_ok"] if passed else spec["checked_bad"],
                 "passed": passed,
             },
@@ -379,6 +460,8 @@ class Desk:
                 "trail": self.trail(spec["hit_id"]),
                 "jev": self.jev.get(spec["hit_id"]),
                 "workflow": workflow.build(self, spec["hit_id"], _display_name),
+                "memo": workflow.analyst_memo(self, spec["hit_id"]),
+                "draft_available": self.openrouter_key,
             },
         }
 
@@ -402,10 +485,42 @@ class Desk:
             "funnel": workflow.funnel(self),
             "bar": [
                 {"name": "Cleared", "count": totals.get("DIFFERENT_ENTITY", 0)},
-                {"name": "Kept open", "count": totals.get("SAME_ENTITY", 0)},
+                {"name": "Sent to compliance", "count": totals.get("SAME_ENTITY", 0)},
                 {"name": "Left for you", "count": totals.get("REVIEW", 0)},
             ],
         }
+
+    def raw_record(self, evidence_id):
+        tables = (
+            ("CUS-", self.customers, "record_id"),
+            ("KYC-", self.kyc, "check_id"),
+            ("NOTE-", self.notes, "note_id"),
+            ("SR-", self.search, "result_id"),
+            ("H-", self.hits, "hit_id"),
+            ("A-", self.alerts, "alert_id"),
+        )
+        for prefix, store, _key in tables:
+            if evidence_id.startswith(prefix) and evidence_id in store:
+                row = store[evidence_id]
+                fields = {key: row.get(key) for key in row.keys()}
+                return {
+                    "id": evidence_id,
+                    "title": "What the auditor sees",
+                    "fields": fields,
+                    "raw": row,
+                }
+        # Accounts / applicants may only appear in evidence text.
+        accounts_path = self.data_dir / "accounts.jsonl"
+        if evidence_id.startswith("ACC-") and accounts_path.is_file():
+            for row in read_jsonl(accounts_path):
+                if row.get("account_id") == evidence_id:
+                    return {"id": evidence_id, "title": "What the auditor sees", "fields": row, "raw": row}
+        onboarding_path = self.data_dir / "onboarding.jsonl"
+        if evidence_id.startswith("APP-") and onboarding_path.is_file():
+            for row in read_jsonl(onboarding_path):
+                if row.get("kyc_applicant_id") == evidence_id:
+                    return {"id": evidence_id, "title": "What the auditor sees", "fields": row, "raw": row}
+        return None
 
     def trail(self, hit_id):
         row = self.output.get(hit_id, {})
@@ -559,14 +674,25 @@ class Handler(BaseHTTPRequestHandler):
             row = DESK.output.get(hit_id)
             if not row:
                 return self._json({"error": "missing"}, 404)
+            flow = workflow.build(DESK, hit_id, _display_name)
             return self._json({
                 "row": {k: v for k, v in row.items()},
                 "why": DESK.why(hit_id),
                 "brief": DESK.brief(hit_id),
                 "trail": DESK.trail(hit_id),
                 "jev": DESK.jev.get(hit_id),
-                "workflow": workflow.build(DESK, hit_id, _display_name),
+                "workflow": flow,
+                "memo": flow.get("memo"),
+                "draft_available": DESK.openrouter_key,
             })
+        if path.startswith("/api/record/"):
+            evidence_id = urllib.parse.unquote(path.split("/")[-1])
+            record = DESK.raw_record(evidence_id)
+            if not record:
+                return self._json({"error": "missing"}, 404)
+            return self._json(record)
+        if path == "/favicon.ico":
+            return self._send(204, b"", "image/x-icon")
         if path in ("/", "/index.html"):
             return self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
         if path.startswith("/static/"):
@@ -581,11 +707,20 @@ class Handler(BaseHTTPRequestHandler):
                 kind = "text/css; charset=utf-8"
             elif name.endswith(".js"):
                 kind = "text/javascript; charset=utf-8"
+            elif name.endswith(".json"):
+                kind = "application/json; charset=utf-8"
             return self._send(200, target.read_bytes(), kind)
         return self._send(404, b"not found", "text/plain")
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/api/draft":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                return self._json({"ok": False, "error": "not json"}, 400)
+            return self._json(DESK.draft_wording(payload.get("hit_id")))
         if parsed.path != "/api/override":
             return self._send(404, b"not found", "text/plain")
         length = int(self.headers.get("Content-Length") or 0)
@@ -596,17 +731,56 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(DESK.override(payload))
 
 
+def _load_env():
+    path = ROOT / ".env"
+    if not path.is_file():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
 def main():
     global DESK
     if len(sys.argv) not in (3, 4):
         sys.stderr.write("usage: python3 ui/serve.py <data_dir> <output_file> [port]\n")
         sys.exit(2)
+    _load_env()
     data_dir = Path(sys.argv[1]).resolve()
     output_path = Path(sys.argv[2]).resolve()
     port = int(sys.argv[3]) if len(sys.argv) == 4 else 8765
+    if not data_dir.is_dir():
+        sys.stderr.write(f"error: data folder not found: {data_dir}\n")
+        sys.exit(2)
+    if not output_path.is_file():
+        sys.stderr.write(f"error: output file not found: {output_path}\n")
+        sys.exit(2)
     DESK = Desk(data_dir, output_path)
-    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
-    sys.stderr.write(f"screening desk on http://127.0.0.1:{port}\n")
+    # Bind the same host we print. Binding 0.0.0.0 while another process owns
+    # 127.0.0.1:port makes the printed URL open the wrong app.
+    host = "127.0.0.1"
+    try:
+        server = ThreadingHTTPServer((host, port), Handler)
+    except OSError as error:
+        sys.stderr.write(
+            f"error: could not start the screening desk on http://{host}:{port}\n"
+            f"  {error}\n"
+            f"  Try another port, for example:\n"
+            f"  python3 ui/serve.py {sys.argv[1]} {sys.argv[2]} {port + 1}\n"
+        )
+        sys.exit(1)
+    url = f"http://{host}:{port}/"
+    sys.stderr.write(
+        f"screening desk on {url}\n"
+        f"open that URL in your browser (this process does not open a window)\n"
+        f"data={data_dir.name}  output={output_path.name}  hits={len(DESK.output)}\n"
+    )
     server.serve_forever()
 
 

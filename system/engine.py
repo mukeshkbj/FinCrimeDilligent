@@ -1787,6 +1787,9 @@ def decide_person(store, alert, hit, seed, group, screened):
         facts=facts,
         search_ids=search_ids if dob_origin == "search" else [],
     )
+    used_search = dob_origin == "search" and bool(search_ids) and (
+        dob_agree or dob_mismatch or blocked_review or "DOB_MISMATCH" in applicable
+    )
     evidence = build_evidence(
         decision=decision,
         applicable=set(applicable),
@@ -1798,8 +1801,21 @@ def decide_person(store, alert, hit, seed, group, screened):
         dob_source=dob_source,
         name_source=name_source,
         search_ids=search_ids if dob_origin == "search" else [],
-        used_search=dob_origin == "search" and bool(search_ids) and (dob_agree or dob_mismatch or blocked_review or "DOB_MISMATCH" in applicable),
+        used_search=used_search,
         hit_countries=hit_countries,
+        seed=seed,
+    )
+    evidence_notes = build_evidence_notes(
+        decision=decision,
+        group=group,
+        record_sources=record_sources,
+        facts=facts,
+        residence=residence,
+        dob_source=dob_source,
+        name_source=name_source,
+        customer_dob=customer_dob,
+        compare_name=compare_name,
+        search_ids=search_ids if used_search else [],
         seed=seed,
     )
     return {
@@ -1809,6 +1825,7 @@ def decide_person(store, alert, hit, seed, group, screened):
         "reason": reason,
         "evidence": evidence,
         "group": sorted(group),
+        "_evidence_notes": evidence_notes,
         "_audit": {
             "name_agree": bool(name_agree),
             "dob_agree": bool(dob_agree),
@@ -1831,7 +1848,7 @@ _ID_RE = re.compile(r"\b(?:H|CUS|KYC|NOTE|SR|A|ACC|APP)-[0-9A-Za-z]+\b")
 
 
 def cited_ids(reason):
-    """IDs written in the reason, in a stable order. Evidence is this list."""
+    """IDs written in the reason, in a stable order."""
     found = []
     for item in _ID_RE.findall(reason or ""):
         if item not in found:
@@ -2137,6 +2154,94 @@ def build_reason(
 
 
 
+def build_evidence_notes(
+    decision,
+    group,
+    record_sources,
+    facts,
+    residence,
+    dob_source,
+    name_source,
+    customer_dob,
+    compare_name,
+    search_ids,
+    seed,
+):
+    """Short fact lines for evidence ids, built only from facts already decided."""
+    notes = {}
+    merged = len(group) > 1
+    for record_id in sorted(group):
+        if decision == "SAME_ENTITY" and merged:
+            notes[record_id] = (
+                f"{record_id} is the same person (same phone and full date of birth)"
+            )
+        else:
+            countries = []
+            for rid, places in record_sources:
+                if rid == record_id:
+                    countries = sorted(places)
+                    break
+            if countries:
+                notes[record_id] = f"{record_id} lists {', '.join(countries)}"
+            else:
+                notes[record_id] = f"{record_id} is the customer record used for this hit"
+    if name_source and compare_name:
+        notes[name_source] = f"{name_source} gives the verified name {_plain(compare_name)}"
+    if dob_source and customer_dob and customer_dob.y:
+        notes[dob_source] = f"{dob_source} gives the date of birth {customer_dob.iso()}"
+    if facts.get("country_source") and facts.get("country"):
+        source = facts["country_source"]
+        notes[source] = f"{source} gives the document country {facts['country']}"
+    for note_id, countries in residence:
+        places = ", ".join(sorted(countries))
+        notes[note_id] = f"{note_id} records past residence in {places}"
+    for extra_id, country in facts.get("extra_countries") or []:
+        notes[extra_id] = f"{extra_id} gives the document country {country}"
+    for search_id in search_ids or []:
+        notes[search_id] = f"{search_id} supplies a date of birth for the hit"
+    if seed and seed not in notes:
+        notes[seed] = f"{seed} is the customer record used for this hit"
+    return notes
+
+
+def ground_reason(row):
+    """Ensure every evidence id is named in the reason (2–4 sentences, no '!')."""
+    reason = re.sub(r"\s+", " ", (row.get("reason") or "").strip())
+    reason = reason.replace("!", ".")
+    evidence = [item for item in (row.get("evidence") or []) if item]
+    notes = row.pop("_evidence_notes", None) or {}
+    cited = set(_ID_RE.findall(reason))
+    missing = [item for item in evidence if item not in cited]
+    parts = [part.rstrip(".") + "." for part in _sentences(reason) if part.strip()]
+    if missing:
+        room = max(1, 4 - max(len(parts), 1))
+        if len(parts) >= 4:
+            parts = parts[:3]
+            room = 1
+        if len(missing) <= room:
+            for evidence_id in missing:
+                fact = notes.get(evidence_id) or f"{evidence_id} was used in the decision"
+                parts.append(sentence(fact))
+        else:
+            parts.append("Records used: " + ", ".join(evidence) + ".")
+    elif row.get("decision") == "REVIEW" and "would settle it" not in reason:
+        if len(parts) < 4:
+            parts.append("A listed date of birth for the hit would settle it.")
+    if len(parts) == 1 and evidence:
+        if len(parts) < 4:
+            parts.append("Records used: " + ", ".join(evidence) + ".")
+    elif len(parts) == 1 and row.get("decision") == "REVIEW":
+        parts.append("A listed date of birth for the hit would settle it.")
+    # Drop empties; keep at most four sentences.
+    parts = [part for part in parts if part.strip()][:4]
+    text = " ".join(parts)
+    text = re.sub(r"\s+", " ", text).strip()
+    if text and text[-1] not in ".":
+        text += "."
+    row["reason"] = text
+    return row
+
+
 def build_evidence(
     decision,
     applicable,
@@ -2239,11 +2344,13 @@ def combine(alert, hit, outcomes):
     decisions = {item["decision"] for item in outcomes}
     evidence = []
     seen = set()
+    evidence_notes = {}
     for item in outcomes:
         for evidence_id in item["evidence"]:
             if evidence_id not in seen:
                 seen.add(evidence_id)
                 evidence.append(evidence_id)
+        evidence_notes.update(item.get("_evidence_notes") or {})
     if len(outcomes) == 1:
         chosen = outcomes[0]
         return {
@@ -2254,6 +2361,7 @@ def combine(alert, hit, outcomes):
             "customer_record_id": chosen["customer_record_id"],
             "reason": chosen["reason"],
             "evidence": chosen["evidence"],
+            "_evidence_notes": chosen.get("_evidence_notes") or evidence_notes,
             "_audit": chosen.get("_audit") or {},
         }
     if len(decisions) == 1:
@@ -2268,6 +2376,7 @@ def combine(alert, hit, outcomes):
             "customer_record_id": "AMBIGUOUS",
             "reason": chosen["reason"],
             "evidence": evidence,
+            "_evidence_notes": evidence_notes,
             "_audit": audit,
         }
     id_list = [item["customer_record_id"] for item in outcomes if item.get("customer_record_id")]
@@ -2282,6 +2391,7 @@ def combine(alert, hit, outcomes):
             f"Records {ids} lead to different decisions. A document that picks one person would settle it."
         ),
         "evidence": evidence,
+        "_evidence_notes": evidence_notes,
     }
 
 
@@ -2468,9 +2578,16 @@ def _write_rows(output_path, hits, answered, logs):
     with open(output_path, "w", encoding="utf-8") as handle, open(side, "w", encoding="utf-8") as jev_handle:
         for hit in hits:
             row = dict(answered.get(hit["hit_id"]) or _failsafe(hit))
-            row["evidence"] = cited_ids(row.get("reason"))
+            # Keep the records that decided the hit; never cite the hit itself.
+            row["evidence"] = sorted(
+                e for e in (row.get("evidence") or []) if not str(e).startswith("H-")
+            )
+            ground_reason(row)
+            row.pop("_evidence_notes", None)
+            row.pop("_audit", None)
+            row.pop("group", None)
             counts[row["decision"]] += 1
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=False) + "\n")
         for log in logs:
             jev_handle.write(json.dumps(log, ensure_ascii=False) + "\n")
     return counts
