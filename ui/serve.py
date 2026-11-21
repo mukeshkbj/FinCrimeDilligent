@@ -230,6 +230,7 @@ class Desk:
         cleared_said = 0
         same_true = 0
         same_caught = 0
+        different_true = 0
         for label in self.labels.values():
             answer = self.output.get(label["hit_id"], {})
             said = answer.get("decision", "REVIEW")
@@ -244,6 +245,8 @@ class Desk:
                 false_positive_clears += 1
             if said == "DIFFERENT_ENTITY" and truth == "DIFFERENT_ENTITY":
                 cleared_said += 1
+            if truth == "DIFFERENT_ENTITY":
+                different_true += 1
             if truth == "SAME_ENTITY":
                 same_true += 1
                 if said == "SAME_ENTITY":
@@ -264,48 +267,52 @@ class Desk:
             "right": right,
             "unsafe": unsafe,
             "decision_score": round(score, 1),
-            "false_positive_clears": false_positive_clears,
+            "false_positive_clears": f"{round(100.0 * cleared_said / different_true, 1) if different_true else 0.0}%",
             "clearance_precision": round(clearance_precision, 1),
             "same_entity_recall": round(same_recall, 1),
             "review_rate": round(review_rate, 1),
         }
 
     def draft_wording(self, hit_id):
-        """Optional Grok reword of the memo. Numbers and IDs stay from the engine."""
-        key = os.environ.get("OPENROUTER_API_KEY")
-        if not key:
-            return {
-                "ok": False,
-                "error": "Add OPENROUTER_API_KEY and restart",
-                "disabled": True,
-            }
+        """Optional Grok reword of the memo. Numbers and IDs stay from the engine.
+
+        Uses OPENROUTER_API_KEY when set, else XAI_API_KEY (direct Grok API).
+        A draft that adds any record id, date or number not in the memo is rejected.
+        """
+        import re
+        import urllib.request
+
+        if os.environ.get("OPENROUTER_API_KEY"):
+            key = os.environ["OPENROUTER_API_KEY"]
+            url = "https://openrouter.ai/api/v1/chat/completions"
+            model = os.environ.get("GROK_MODEL") or "x-ai/grok-4.3"
+        elif os.environ.get("XAI_API_KEY"):
+            key = os.environ["XAI_API_KEY"]
+            url = "https://api.x.ai/v1/chat/completions"
+            model = os.environ.get("XAI_MODEL") or "grok-4.20-0309-non-reasoning"
+        else:
+            return {"ok": False, "error": "Add OPENROUTER_API_KEY or XAI_API_KEY and restart", "disabled": True}
         memo = workflow.analyst_memo(self, hit_id)
         if not memo:
             return {"ok": False, "error": "Memo is only for REVIEW hits"}
-        # Stdlib HTTP only — never imported from system/.
-        import urllib.request
-
         body = {
-            "model": "x-ai/grok-4.3",
+            "model": model,
             "temperature": 0,
             "messages": [
                 {
                     "role": "system",
                     "content": (
-                        "Rewrite the analyst memo in clear English. Keep every record id, "
-                        "date and number exactly as given. Do not add facts. 2 to 4 short paragraphs."
+                        "Rewrite the analyst memo in clear English for a compliance analyst. Keep every record id, "
+                        "date and number exactly as given. Do not add facts. 2 to 4 short paragraphs. No markdown."
                     ),
                 },
                 {"role": "user", "content": memo["text"]},
             ],
         }
         request = urllib.request.Request(
-            "https://openrouter.ai/api/v1/chat/completions",
+            url,
             data=json.dumps(body).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {key}",
-                "Content-Type": "application/json",
-            },
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             method="POST",
         )
         try:
@@ -313,10 +320,14 @@ class Desk:
                 payload = json.loads(response.read().decode("utf-8"))
             text = payload["choices"][0]["message"]["content"].strip()
         except Exception as error:
-            return {"ok": False, "error": str(error)}
+            return {"ok": False, "error": f"Grok did not answer ({type(error).__name__}). The memo above is unchanged."}
+        facts = re.compile(r"[A-Za-z]+-[A-Za-z0-9]+|\d+(?:[-/.]\d+)*")
+        added = set(facts.findall(text)) - set(facts.findall(memo["text"]))
+        if added:
+            return {"ok": False, "error": "Draft rejected: it added facts not in the memo (" + ", ".join(sorted(added)[:3]) + ")."}
         return {
             "ok": True,
-            "label": "Draft wording by Grok · facts from the engine",
+            "label": f"Draft wording by Grok ({model}) · facts from the engine, checked",
             "text": text,
             "facts": memo,
         }
