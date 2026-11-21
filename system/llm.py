@@ -34,6 +34,8 @@ _AGEISH = re.compile(r"year-old|years old|aged\s+\d|age of\s+\d|\bwas\s+\d{1,2}\
 
 def endpoint():
     """Return the active chat endpoint, or None when the run must stay on rules."""
+    import dotenv
+    dotenv.load_dotenv()
     openrouter = os.environ.get("OPENROUTER_API_KEY", "").strip()
     if openrouter:
         return {

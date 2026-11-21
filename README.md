@@ -15,6 +15,8 @@ python3 validate.py --data <data_dir> --output <output_file> --score <data_dir>/
 
 Python 3 standard library only. No model is required. A full development run is about 4 seconds. If a key is present, `OPENROUTER_API_KEY` is used first and `XAI_API_KEY` otherwise; neither key is read from the repo, and a missing key or an error stays on the rules.
 
+Copy `.env.example` to `.env` and fill in the blanks. `system/run` loads `.env` without overriding variables already set, and it never prints those values.
+
 ## Practice score
 
 `validate.py` on the 50 practice labels, two identical runs:

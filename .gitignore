@@ -3,6 +3,8 @@
 dev/
 *.xlsx
 .env
+.env.*
+!.env.example
 *.key
 __pycache__/
 *.pyc

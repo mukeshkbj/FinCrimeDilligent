@@ -1931,6 +1931,8 @@ def self_test():
 
 
 def main():
+    import dotenv
+    dotenv.load_dotenv()
     if len(sys.argv) == 2 and sys.argv[1] == "--self-test":
         self_test()
         return
