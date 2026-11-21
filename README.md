@@ -14,7 +14,7 @@ python3 ui/serve.py <data_dir> <output_file>
 
 `data_dir` is the official room (`alerts.jsonl`, `hits.jsonl`, `customers.jsonl`, `accounts.jsonl`, `onboarding.jsonl`, `kyc_checks.jsonl`, `notes.jsonl`, `search_results.jsonl`, `name_variants.json`). The committed predictions are `output/dev.jsonl`. Do not commit `dev/` or API keys.
 
-Python 3 standard library only. No model is required. A full development run is about 4 seconds. If a key is present, `OPENROUTER_API_KEY` is used first and `XAI_API_KEY` otherwise; neither key is read from the repo, and a missing key or an error stays on the rules.
+Python 3 standard library only. No model is required. A full development run is about 4 seconds. If a key is present, `OPENROUTER_API_KEY` is used first (`typesafe/jev-router`) and `XAI_API_KEY` otherwise (`grok-4.3`). The model may only send a clearance back to review. It cannot create a decision, calls are capped at 120 or 10 minutes, and a missing key or an error stays on the rules. Neither key is read from the repo.
 
 Copy `.env.example` to `.env` and fill in the blanks. `system/run` loads `.env` without overriding variables already set, and it never prints those values.
 
@@ -31,9 +31,10 @@ Copy `.env.example` to `.env` and fill in the blanks. `system/run` loads `.env` 
 | Reason code, given the right decision | 100% |
 | Customer record, given the right decision | 100% |
 | Evidence set against the practice labels | 50 / 50 |
-| Repeat run | byte-identical |
+| Repeat run | byte-identical, five times, with no API key |
+| All 819 hits | 458 cleared, 124 kept open, 237 left for review |
 
-The decision score is the share of cost saved against sending every hit to review. Clearing a true `SAME_ENTITY` or `REVIEW` costs 60, so the engine clears only on an explicit SOP contradiction.
+The decision score is the share of cost saved against sending every hit to review. Clearing a true `SAME_ENTITY` or `REVIEW` costs 60, so the engine clears only on an explicit SOP contradiction. A support note that names the hit's country blocks a location clear. A same-year month or day clash on an unverified customer date, a 1 January hit date, or a day/month swap is left for review.
 
 ```mermaid
 flowchart LR
