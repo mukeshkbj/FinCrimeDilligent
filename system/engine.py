@@ -14,6 +14,8 @@ import re
 import sys
 import time
 import unicodedata
+
+import normalize
 from collections import defaultdict
 from functools import lru_cache
 from pathlib import Path
@@ -559,7 +561,12 @@ def levenshtein(left, right):
 def parts_match(left, right):
     if not left or not right:
         return False
+    # Native script is exact. CJK is never romanised, and a guess is not a match.
+    if any(ord(ch) > 127 for ch in left + right):
+        return left == right
     if left == right or variants_match(left, right):
+        return True
+    if normalize.skeleton_match(left, right):
         return True
     shortest = min(len(left), len(right))
     if shortest < 4:
@@ -653,6 +660,68 @@ def names_agree(left, right):
     if consumed == len(short):
         return True
     return groups >= 2
+
+
+def _normalized_parts(name, is_company):
+    parts = []
+    seen = set()
+    for part in normalize.normalize_parts(name, is_company):
+        if is_company and part in LEGAL_FORMS:
+            continue
+        if part not in seen:
+            seen.add(part)
+            parts.append(part)
+    return tuple(parts)
+
+
+def _script_note(customer_raw, hit_raw):
+    left = normalize.normalize_parts(customer_raw)
+    right = normalize.normalize_parts(hit_raw)
+    shared_cjk = [part for part in left if part in right and any(ord(ch) > 127 for ch in part)]
+    if shared_cjk:
+        return f"CJK name {shared_cjk[0]} matches the same characters on both sides"
+    for raw, other in ((hit_raw, "the customer"), (customer_raw, "the hit")):
+        scripts = normalize.scripts_in(raw) & {"Cyrillic", "Greek", "Arabic"}
+        if not scripts:
+            continue
+        excerpt = normalize.native_excerpt(raw)
+        latin = " ".join(part for part in normalize.normalize_parts(raw) if part and ord(part[0]) < 128)
+        if excerpt and latin:
+            return f"{sorted(scripts)[0]} name {excerpt} transliterates to {latin}, matching {other}"
+    return ""
+
+
+def multilingual_relation(customer_raw, hit_names, is_company):
+    """Extra agreement from transliteration. Never a reason to clear.
+
+    Returns agree, uncertain, note. Agree may confirm. Uncertain means the
+    names could be transliterations, so a name clearance is not safe.
+    """
+    left = _normalized_parts(customer_raw, is_company)
+    agree = False
+    uncertain = False
+    note = ""
+    for raw in hit_names:
+        if not raw:
+            continue
+        right = _normalized_parts(raw, is_company)
+        if left and right and names_agree(left, right):
+            agree = True
+            written = _script_note(customer_raw, raw)
+            if written:
+                note = written
+            continue
+        scripts = (normalize.scripts_in(customer_raw) | normalize.scripts_in(raw)) & {"Cyrillic", "Greek", "Arabic"}
+        if scripts and left and right and normalize._close_tokens(
+            tuple(part for part in left if ord(part[0]) < 128),
+            tuple(part for part in right if ord(part[0]) < 128),
+        ):
+            uncertain = True
+    if agree:
+        uncertain = False
+    elif uncertain and not note:
+        note = "The names could be transliterations of each other, so this is not cleared on name"
+    return agree, uncertain, note
 
 
 def any_name_agrees(customer_parts, hit_names, is_company):
@@ -1558,6 +1627,18 @@ def decide_person(store, alert, hit, seed, group, screened):
     else:
         name_agree = any_name_agrees(compare_parts, hit_names, is_company)
         name_mismatch = bool(name_verified and not name_agree)
+    # Transliteration may confirm, or stop a name clearance. It never creates one.
+    # A single real name part still cannot confirm an individual.
+    script_agree, script_uncertain, script_note = multilingual_relation(compare_name, hit_names, is_company)
+    enough_parts = is_company or len(_normalized_parts(compare_name, False)) >= 2
+    applied_agree = bool(script_agree and enough_parts)
+    applied_uncertain = False
+    if applied_agree:
+        name_agree = True
+        name_mismatch = False
+    elif script_uncertain and name_mismatch:
+        name_mismatch = False
+        applied_uncertain = True
 
     dob_verified = bool(facts["dob"] and facts["dob"].y)
     if dob_verified:
@@ -1700,6 +1781,7 @@ def decide_person(store, alert, hit, seed, group, screened):
         seed=seed,
         dob_verified=dob_verified,
         dob_risky=dob_risky,
+        script_note=script_note if (applied_agree or applied_uncertain) else "",
     )
     evidence = build_evidence(
         decision=decision,
@@ -1766,6 +1848,7 @@ def build_reason(
     seed,
     dob_verified=False,
     dob_risky=False,
+    script_note="",
 ):
     hit_name = hit.get("name") or "the listed name"
     dob_text = customer_dob.iso() if customer_dob and customer_dob.y else None
@@ -1789,12 +1872,13 @@ def build_reason(
         )
 
     if decision == "SAME_ENTITY" and code == "NAME_LOCATION_MATCH":
-        return " ".join(
-            [
-                sentence(f"Both the customer and the hit are linked to {shared}"),
-                sentence(f"The customer's name agrees with the hit's name {hit_name}"),
-            ]
-        )
+        lines = [
+            sentence(f"Both the customer and the hit are linked to {shared}"),
+            sentence(f"The customer's name agrees with the hit's name {hit_name}"),
+        ]
+        if script_note:
+            lines.append(sentence(script_note))
+        return " ".join(lines[:4])
     if decision == "SAME_ENTITY":
         lines = [
             sentence(f"The customer's date of birth {dob_bit} agrees with the hit's {dob_phrase}"),
@@ -1802,18 +1886,21 @@ def build_reason(
         if shared:
             lines.append(sentence(f"Both the customer and the hit are linked to {shared}"))
         lines.append(sentence(f"The customer's name agrees with the hit's name {hit_name}"))
+        if script_note:
+            lines.append(sentence(script_note))
         return " ".join(lines[:4])
 
     if blocked_review:
-        return " ".join(
-            [
-                sentence(
-                    f"The customer's date of birth {dob_bit} agrees with the hit's {dob_phrase}, and the customer's name agrees with the hit's name {hit_name}"
-                ),
-                sentence(f"The customer is linked only to {cust_places} but the hit is linked only to {hit_places}"),
-                sentence("A country difference does not clear a hit whose name and date of birth agree. A record placing the customer in the hit's country would settle it"),
-            ]
-        )
+        lines = [
+            sentence(
+                f"The customer's date of birth {dob_bit} agrees with the hit's {dob_phrase}, and the customer's name agrees with the hit's name {hit_name}"
+            ),
+            sentence(f"The customer is linked only to {cust_places} but the hit is linked only to {hit_places}"),
+            sentence("A country difference does not clear a hit whose name and date of birth agree. A record placing the customer in the hit's country would settle it"),
+        ]
+        if script_note:
+            lines.append(sentence(script_note))
+        return " ".join(lines[:4])
 
     sentences = {}
     if "TEMPORAL_IMPOSSIBILITY" in applicable and earliest:
@@ -1906,6 +1993,8 @@ def build_reason(
         lines.append(sentence(f"The hit name is {hit_name}"))
     lines.append(sentence(missing))
     lines.append(sentence(document))
+    if script_note:
+        lines.append(sentence(script_note))
     return " ".join(lines[:4])
 
 
@@ -2169,6 +2258,15 @@ def apply_jev(row, store):
             audit.get("hit_names") or [],
             bool(audit.get("is_company")),
         )
+        extra_agree, extra_uncertain, _note = multilingual_relation(
+            audit.get("compare_name"),
+            audit.get("hit_names") or [],
+            bool(audit.get("is_company")),
+        )
+        if extra_agree:
+            again = True
+        elif extra_uncertain and again is False:
+            again = None
     relation = _second_dob(audit.get("customer_y"), audit.get("customer_m"), audit.get("customer_d"), audit.get("hit_dates") or [])
     # Only the fact this reason code relies on can force a downgrade.
     if code == "NAME_MISMATCH_VERIFIED" and again is True:

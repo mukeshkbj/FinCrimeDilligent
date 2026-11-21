@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import unicodedata
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -113,6 +114,20 @@ BANNED = (
     "station",
     "recall",
 )
+
+
+def _display_name(hit):
+    """Latin list name, with the original script beside it when the file has one."""
+    name = hit.get("name") or ""
+    native = ""
+    for alias in [name] + [str(item) for item in (hit.get("aliases") or [])]:
+        letters = [ch for ch in alias if ch.isalpha() and "LATIN" not in unicodedata.name(ch, "LATIN")]
+        if letters:
+            native = "".join(letters)[:24]
+            break
+    if native and native not in name:
+        return f"{name} ({native})"
+    return name
 
 
 def read_jsonl(path):
@@ -320,7 +335,7 @@ class Desk:
                 "asked": spec["asked"],
                 "screened_name": screened.get("name"),
                 "screened_on": alert.get("screened_at"),
-                "hit_name": hit.get("name"),
+                "hit_name": _display_name(hit),
                 "happened": row.get("reason"),
                 "outcome": PLAIN.get(decision, decision),
                 "checked": spec["checked_ok"] if passed else spec["checked_bad"],
