@@ -21,3 +21,6 @@ system/.llm-cache/
 output/.llm-cache/
 .claude/
 .cursor/
+.test-results/
+gate-evidence/
+.playwright-mcp/
