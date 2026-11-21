@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Deterministic sanctions identity resolver.
 
-Decisions follow dev/POLICY.md literally. A model is never required and never
-changes a decision: the same inputs always produce the same decision and
-reason code. See PRINCIPLES.md.
+Decisions follow dev/POLICY.md literally. A model is never required. It may
+only send a clearance back to review, and with no key it is not called. The
+same inputs and the same key state produce the same decision and reason code.
+See PRINCIPLES.md.
 """
 
 from __future__ import annotations
@@ -415,6 +416,32 @@ def dob_agrees(customer, hit):
     return True
 
 
+def same_year_risky(customer, hit, verified):
+    """Same-year month or day clash that is not safe to clear on.
+
+    Unverified customer dates, a 1 January hit date, and a day/month swap that
+    would make the two dates agree all go to review instead of a clearance.
+    """
+    if customer is None or hit is None or customer.y is None or hit.y is None or customer.y != hit.y:
+        return False
+    months_differ = bool(customer.m and hit.m and customer.m != hit.m)
+    days_differ = bool(
+        customer.m and hit.m and customer.m == hit.m and customer.d and hit.d and customer.d != hit.d
+    )
+    if not months_differ and not days_differ:
+        return False
+    if not verified:
+        return True
+    if hit.m == 1 and hit.d == 1:
+        return True
+    if customer.m and customer.d and hit.m and hit.d and customer.d <= 12 and hit.d <= 12:
+        swapped = customer.d == hit.m and customer.m == hit.d
+        same = customer.m == hit.m and customer.d == hit.d
+        if swapped and not same:
+            return True
+    return False
+
+
 def dob_contradicts(customer, hit):
     if customer is None or hit is None or customer.y is None or hit.y is None:
         return False
@@ -486,10 +513,15 @@ PLACEHOLDERS = {"na", "test", "unknown", "xxx", "none", "null", "nil"}
 
 
 def load_variants(path):
-    with open(path, encoding="utf-8") as handle:
-        payload = json.load(handle)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return defaultdict(set), set()
+    if not isinstance(payload, dict):
+        return defaultdict(set), set()
     groups = payload.get("groups") or []
-    forms = {fold(item) for item in payload.get("company_legal_forms") or []}
+    forms = {fold(item) for item in (payload.get("company_legal_forms") or []) if item}
     index = defaultdict(set)
     for number, group in enumerate(groups):
         for part in group:
@@ -560,24 +592,35 @@ def name_parts(name, is_company):
     return tuple(parts)
 
 
-def max_covered(short, longer):
+def name_coverage(short, longer):
+    """How much of the shorter name is covered, and how many part-matches that took.
+
+    Writing two parts as one word (Abdul Salam / Abdulsalam) consumes both parts
+    and counts as one match. A name agrees when every part of the shorter name
+    is covered, or when at least two separate parts match.
+    """
     n_short = len(short)
     n_long = len(longer)
-    best = 0
+    best_consumed = 0
+    best_groups = 0
 
-    def walk(index, used, covered):
-        nonlocal best
-        if covered > best:
-            best = covered
-        if index >= n_short or covered == n_short or covered + (n_short - index) <= best:
+    def walk(index, used, consumed, groups):
+        nonlocal best_consumed, best_groups
+        if consumed > best_consumed:
+            best_consumed = consumed
+        if groups > best_groups:
+            best_groups = groups
+        if index >= n_short or consumed == n_short:
             return
-        walk(index + 1, used, covered)
+        if consumed + (n_short - index) <= best_consumed and groups + (n_short - index) <= best_groups:
+            return
+        walk(index + 1, used, consumed, groups)
         for pos in range(n_long):
             if pos in used:
                 continue
             if parts_match(short[index], longer[pos]):
                 used.add(pos)
-                walk(index + 1, used, covered + 1)
+                walk(index + 1, used, consumed + 1, groups + 1)
                 used.remove(pos)
         if index + 1 < n_short:
             joined = short[index] + short[index + 1]
@@ -586,7 +629,7 @@ def max_covered(short, longer):
                     continue
                 if parts_match(joined, longer[pos]):
                     used.add(pos)
-                    walk(index + 2, used, covered + 2)
+                    walk(index + 2, used, consumed + 2, groups + 1)
                     used.remove(pos)
         for pos in range(n_long - 1):
             if pos in used or (pos + 1) in used:
@@ -594,22 +637,22 @@ def max_covered(short, longer):
             if parts_match(short[index], longer[pos] + longer[pos + 1]):
                 used.add(pos)
                 used.add(pos + 1)
-                walk(index + 1, used, covered + 1)
+                walk(index + 1, used, consumed + 1, groups + 1)
                 used.remove(pos)
                 used.remove(pos + 1)
 
-    walk(0, set(), 0)
-    return best
+    walk(0, set(), 0, 0)
+    return best_consumed, best_groups
 
 
 def names_agree(left, right):
     if not left or not right:
         return False
     short, longer = (left, right) if len(left) <= len(right) else (right, left)
-    covered = max_covered(short, longer)
-    if len(short) <= 1:
-        return covered == len(short)
-    return covered >= 2
+    consumed, groups = name_coverage(short, longer)
+    if consumed == len(short):
+        return True
+    return groups >= 2
 
 
 def any_name_agrees(customer_parts, hit_names, is_company):
@@ -627,20 +670,36 @@ def any_name_agrees(customer_parts, hit_names, is_company):
 
 DOC_RE = re.compile(r"passport|national id|driving licen[cs]e|identity card|id card|registry extract", re.I)
 OK_RE = re.compile(r"verif|validat|approv|confirm|passed|cleared|successful|processed|completed|accepted", re.I)
-PROV_RE = re.compile(r"onfido|persona|sumsub|veriff|jumio|trulioo", re.I)
-RES_RE = re.compile(
-    r"\b(lived|living|reside[ds]?|residing|residence|residency|resident|domicil|home|based|relocated|relocation)\b",
+REJECT_RE = re.compile(
+    r"\b(rejected|rejection|failed|failure|expired|could not verify|unable to verify|not verified|unsuccessful)\b",
     re.I,
 )
+PROV_RE = re.compile(r"onfido|persona|sumsub|veriff|jumio|trulioo", re.I)
 DOB_LABEL_RE = re.compile(r"(?:date of birth|birth date|born|dob)\s*(?:of|on|:|-)?\s*", re.I)
 CHECK_RE = re.compile(r"(?:on|as of)\s+(\d{4}-\d{2}-\d{2})", re.I)
 # Letters outside Latin-1 (Ć, Š, Ž) have to count as part of the name.
 CAPS_RE = re.compile(r"[^\W\d_]+(?:['’\-][^\W\d_]+)*", re.UNICODE)
 NAME_STOP = {"DOB", "ID", "USA", "UK", "UAE", "THE", "AND", "FOR", "VIA", "PER", "FROM"}
+_NUM_WORD = (
+    r"(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|"
+    r"sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)"
+    r"(?:[-\s](?:one|two|three|four|five|six|seven|eight|nine))?"
+)
+_AGE_TOKEN = rf"(?:\d{{1,3}}|{_NUM_WORD})"
 AGE_RE = re.compile(
-    r"\b(?:aged\s+(\d{1,3})|age\s+of\s+(\d{1,3})|age[:\s]+(\d{1,3})|(\d{1,3})\s*-\s*years?\s*-\s*old|(\d{1,3})\s+years?\s+old|was\s+(\d{1,3})(?:\s+years?\s+old)?|(?:^|[\s,])(\d{1,3})\s+year\s+old)\b",
+    rf"\b(?:aged\s+({_AGE_TOKEN})|age\s+of\s+({_AGE_TOKEN})|age[:\s]+({_AGE_TOKEN})|"
+    rf"({_AGE_TOKEN})\s*-\s*years?\s*-\s*old|({_AGE_TOKEN})\s+years?\s+old|"
+    rf"was\s+({_AGE_TOKEN})(?:\s+years?\s+old)?|then\s+({_AGE_TOKEN})|"
+    rf"reached\s+({_AGE_TOKEN})\s+years?\s+of\s+age|(?:^|[\s,])({_AGE_TOKEN})\s+year\s+old)\b",
     re.I,
 )
+BORN_RE = re.compile(r"\bborn\s+(?:on\s+|in\s+)?", re.I)
+_WORD_ONES = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+    "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16,
+    "seventeen": 17, "eighteen": 18, "nineteen": 19,
+}
+_WORD_TENS = {"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90}
 AGE_COMMA_RE = re.compile(r",\s*(\d{1,3})\s*,")
 REPORT_RE = re.compile(
     rf"According to [^;\n]+;\s+({MON})\s+(?:(\d{{1,2}}),\s+)?(\d{{4}})\s*:",
@@ -722,6 +781,10 @@ def extract_doc_country(text):
 def parse_identity_note(text):
     if not text:
         return None
+    # A rejected, failed, or expired check is not a verified identity, even if a
+    # provider name or the word "completed" also appears.
+    if REJECT_RE.search(text):
+        return None
     has_doc = DOC_RE.search(text)
     has_ok = OK_RE.search(text)
     has_prov = PROV_RE.search(text)
@@ -746,18 +809,64 @@ def parse_identity_note(text):
 
 
 def lived_countries(text):
-    if not text or not RES_RE.search(text):
+    """Every country named in a non-identity note counts as a place the customer is tied to.
+
+    The note may say settled, domiciled, stayed and worked, located and employed,
+    lived, resides, moved to, or based in. Matching only those words misses the
+    rest, and a missed country is what lets a location clear through. Naming the
+    country is enough. Callers must not let a note country create a clear by itself.
+    """
+    if not text:
         return set()
     return {canon for _, canon in find_countries(text)}
 
 
+def _word_number(token):
+    text = token.lower().replace("-", " ")
+    parts = text.split()
+    if len(parts) == 1 and parts[0].isdigit():
+        return int(parts[0])
+    if len(parts) == 1 and parts[0] in _WORD_ONES:
+        return _WORD_ONES[parts[0]]
+    if len(parts) == 1 and parts[0] in _WORD_TENS:
+        return _WORD_TENS[parts[0]]
+    if len(parts) == 2 and parts[0] in _WORD_TENS and parts[1] in _WORD_ONES and _WORD_ONES[parts[1]] < 10:
+        return _WORD_TENS[parts[0]] + _WORD_ONES[parts[1]]
+    return None
+
+
 def _age_from_match(match):
     for group in match.groups():
-        if group and group.isdigit():
+        if not group:
+            continue
+        if group.isdigit():
             age = int(group)
-            if 1 <= age <= 120:
-                return age
+            spelled = False
+        else:
+            age = _word_number(group)
+            spelled = True
+        if age is None or not 1 <= age <= 120:
+            continue
+        # "one of the" is not an age. Spelled ages under 10 are not used.
+        if spelled and age < 10:
+            continue
+        return age
     return None
+
+
+def _anchor_date(chunk):
+    """The date an age is measured against. A month-and-year beats a bare year."""
+    month_date = None
+    year_only = None
+    for match in DATE_RE.finditer(chunk):
+        parsed = parse_date(match.group(0))
+        if not parsed or not parsed.y or not 1900 < parsed.y < 2100:
+            continue
+        if parsed.m and month_date is None:
+            month_date = parsed
+        elif parsed.m is None and parsed.d is None and year_only is None:
+            year_only = parsed
+    return month_date or year_only
 
 
 def ages_in_text(text):
@@ -778,12 +887,7 @@ def ages_in_text(text):
                 ages.append(age)
         if not ages:
             continue
-        date_found = None
-        for match in DATE_RE.finditer(chunk):
-            parsed = parse_date(match.group(0))
-            if parsed and parsed.y and parsed.m and parsed.y > 1900:
-                date_found = parsed
-                break
+        date_found = _anchor_date(chunk)
         if not date_found:
             continue
         for age in ages:
@@ -795,6 +899,33 @@ def ages_in_text(text):
         if 1800 < year < 2100 and year not in seen:
             seen.append(year)
     return sorted(seen)
+
+
+def birth_dates_in_text(text):
+    """Explicit 'born on 30 June 1969' or 'born in 1966' dates. Full dates stay full."""
+    if not text:
+        return []
+    found = []
+    seen = set()
+    for match in BORN_RE.finditer(text):
+        window = text[match.end():match.end() + 32]
+        date_match = DATE_RE.search(window)
+        if not date_match or date_match.start() > 3:
+            continue
+        parsed = parse_date(date_match.group(0))
+        if not parsed or not parsed.y:
+            continue
+        key = parsed.iso()
+        if key not in seen:
+            seen.add(key)
+            found.append(parsed)
+    return found
+
+
+def _dob_phrase(dates):
+    if len(dates) == 2 and all(item.m is None and item.d is None for item in dates):
+        return f"{dates[0].y} or {dates[1].y}"
+    return ", ".join(item.iso() for item in dates)
 
 
 def dated_reports(notes):
@@ -853,12 +984,27 @@ def country_in_text(text, canon):
 
 
 def read_jsonl(path):
+    """Missing files and bad lines are skipped. A broken file must not erase the run."""
     rows = []
-    with open(path, encoding="utf-8") as handle:
-        for line in handle:
+    try:
+        handle = open(path, encoding="utf-8")
+    except OSError:
+        sys.stderr.write(f"missing {path}\n")
+        return rows
+    with handle:
+        for number, line in enumerate(handle, 1):
             line = line.strip()
-            if line:
-                rows.append(json.loads(line))
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                sys.stderr.write(f"bad json {path}:{number}\n")
+                continue
+            if isinstance(row, dict):
+                rows.append(row)
+            else:
+                sys.stderr.write(f"bad json {path}:{number}\n")
     return rows
 
 
@@ -887,15 +1033,21 @@ class Store:
     def __init__(self, data_dir):
         global VARIANT_INDEX, LEGAL_FORMS
         VARIANT_INDEX, LEGAL_FORMS = load_variants(f"{data_dir}/name_variants.json")
-        self.alerts = {row["alert_id"]: row for row in read_jsonl(f"{data_dir}/alerts.jsonl")}
-        self.hits = read_jsonl(f"{data_dir}/hits.jsonl")
+        self.alerts = {}
+        for row in read_jsonl(f"{data_dir}/alerts.jsonl"):
+            if row.get("alert_id"):
+                self.alerts[row["alert_id"]] = row
+        self.hits = [row for row in read_jsonl(f"{data_dir}/hits.jsonl") if row.get("hit_id")]
         self.hit_ids = {row["hit_id"] for row in self.hits}
-        self.customers = {row["record_id"]: row for row in read_jsonl(f"{data_dir}/customers.jsonl")}
-        accounts = read_jsonl(f"{data_dir}/accounts.jsonl")
-        onboarding = read_jsonl(f"{data_dir}/onboarding.jsonl")
-        checks = read_jsonl(f"{data_dir}/kyc_checks.jsonl")
-        notes = read_jsonl(f"{data_dir}/notes.jsonl")
-        searches = read_jsonl(f"{data_dir}/search_results.jsonl")
+        self.customers = {}
+        for row in read_jsonl(f"{data_dir}/customers.jsonl"):
+            if row.get("record_id"):
+                self.customers[row["record_id"]] = row
+        accounts = [row for row in read_jsonl(f"{data_dir}/accounts.jsonl") if row.get("account_id") and row.get("customer_id")]
+        onboarding = [row for row in read_jsonl(f"{data_dir}/onboarding.jsonl") if row.get("account_id") and row.get("customer_id")]
+        checks = [row for row in read_jsonl(f"{data_dir}/kyc_checks.jsonl") if row.get("check_id") and row.get("applicant_id")]
+        notes = [row for row in read_jsonl(f"{data_dir}/notes.jsonl") if row.get("note_id")]
+        searches = [row for row in read_jsonl(f"{data_dir}/search_results.jsonl") if row.get("result_id")]
 
         self.accounts_by_id = defaultdict(list)
         self.accounts_by_customer = defaultdict(list)
@@ -909,7 +1061,9 @@ class Store:
 
         self.onboarding = defaultdict(list)
         for row in onboarding:
-            self.onboarding[(row["account_id"], row["customer_id"])].append(row["kyc_applicant_id"])
+            applicant = row.get("kyc_applicant_id")
+            if applicant:
+                self.onboarding[(row["account_id"], row["customer_id"])].append(applicant)
 
         self.checks_by_applicant = defaultdict(list)
         self.kyc = {}
@@ -1200,16 +1354,20 @@ def gather_hit_dobs(store, hit, hit_countries, is_company):
     if is_company:
         return [], "none", "", []
     paragraph = first_paragraph(hit.get("profile_notes"))
+    born = birth_dates_in_text(paragraph)
+    if born:
+        return born, "notes", _dob_phrase(born), []
     years = ages_in_text(paragraph)
     if years:
         dates = [Date(year) for year in years]
-        phrase = f"{dates[0].y} or {dates[1].y}" if len(dates) == 2 else ", ".join(str(item.y) for item in dates)
-        return dates, "notes", phrase, []
+        return dates, "notes", _dob_phrase(dates), []
     if not hit_countries:
         return [], "none", "", []
     phrase_role = role_phrase(hit)
     matched = []
     years = []
+    dates = []
+    seen_dates = set()
     seen_results = set()
     queries = []
     for name in hit_name_list(hit):
@@ -1228,14 +1386,25 @@ def gather_hit_dobs(store, hit, hit_countries, is_company):
                 continue
             matched.append(result["result_id"])
             snippet = result.get("snippet") or ""
+            explicit = birth_dates_in_text(snippet)
+            if explicit:
+                for item in explicit:
+                    if item.iso() not in seen_dates:
+                        seen_dates.add(item.iso())
+                        dates.append(item)
+                continue
             for year in ages_in_text(snippet):
                 if year not in years:
                     years.append(year)
-    if not years:
+    for year in sorted(years):
+        key = f"{year:04d}"
+        if key not in seen_dates:
+            seen_dates.add(key)
+            dates.append(Date(year))
+    if not dates:
         return [], "none", "", []
-    dates = [Date(year) for year in sorted(years)]
-    phrase = f"{dates[0].y} or {dates[1].y}" if len(dates) == 2 else ", ".join(str(item.y) for item in dates)
-    return dates, "search", phrase, sorted(matched)
+    dates.sort(key=lambda item: item.key())
+    return dates, "search", _dob_phrase(dates), sorted(matched)
 
 
 def identity_facts(store, group):
@@ -1313,21 +1482,19 @@ def join_countries(countries):
 
 
 def second_fact(code, hit_name, cust_places, hit_places, dob_bit, dob_phrase, compare_name, earliest, at_most):
-    """A second sentence that still uses this hit's facts, so a one-fact decision is not a single sentence."""
+    """A second sentence. It names the hit and does not repeat the first sentence's dates or countries."""
     if code == "LOCATION_MISMATCH":
-        verb = "is" if "," not in (cust_places or "") else "are"
-        return sentence(f"{cust_places} {verb} not among the countries of hit {hit_name} ({hit_places})")
+        return sentence(f"Hit {hit_name} shares none of the customer's countries")
     if code == "NAME_MISMATCH_VERIFIED":
-        return sentence(f"The verified name {compare_name} agrees with none of the names on hit {hit_name}")
+        return sentence(f"No name on hit {hit_name} agrees with the verified name")
     if code == "DOB_MISMATCH":
-        return sentence(f"Customer date {dob_bit} contradicts every date given for hit {hit_name} ({dob_phrase})")
+        return sentence(f"No date for hit {hit_name} agrees with the customer")
     if code == "TEMPORAL_IMPOSSIBILITY":
-        when = earliest.iso() if earliest else "the reported date"
-        return sentence(f"Hit {hit_name} reports activity on {when}, and the customer was at most {at_most} then")
+        return sentence(f"Hit {hit_name} could not be the customer at the date of that report")
     if code == "DECEASED":
         return sentence(f"Hit {hit_name} had already died before this customer was screened")
     if code == "ENTITY_TYPE_MISMATCH":
-        return sentence(f"Hit {hit_name} is a different kind of entity from the customer")
+        return sentence(f"Hit {hit_name} cannot be the same entity as the customer")
     return sentence(f"Hit {hit_name} is not resolved as the same entity")
 
 
@@ -1356,19 +1523,22 @@ def decide_person(store, alert, hit, seed, group, screened):
         if countries:
             record_sources.append((record_id, countries))
             record_countries |= countries
-    customer_countries = set(record_countries)
+    # Record and verified-document countries can justify a location clear.
+    # A country named only in a note can overlap the hit and block that clear,
+    # but it cannot create one: this change only removes clears.
+    anchor_countries = set(record_countries)
     if facts["country"]:
-        customer_countries.add(facts["country"])
+        anchor_countries.add(facts["country"])
     for _, country in facts["extra_countries"]:
-        customer_countries.add(country)
+        anchor_countries.add(country)
     residence_countries = set()
     for _, countries in residence:
         residence_countries |= countries
-        customer_countries |= countries
+    customer_countries = set(anchor_countries) | residence_countries
 
     hit_countries = hit_country_set(hit)
     overlap = customer_countries & hit_countries
-    location_mismatch = bool(customer_countries) and bool(hit_countries) and not overlap
+    location_mismatch = bool(anchor_countries) and bool(hit_countries) and not overlap
 
     # Name used for the comparison. Verified legal name outranks the record.
     if facts["name"]:
@@ -1389,7 +1559,8 @@ def decide_person(store, alert, hit, seed, group, screened):
         name_agree = any_name_agrees(compare_parts, hit_names, is_company)
         name_mismatch = bool(name_verified and not name_agree)
 
-    if facts["dob"] and facts["dob"].y:
+    dob_verified = bool(facts["dob"] and facts["dob"].y)
+    if dob_verified:
         customer_dob = facts["dob"]
         dob_source = facts["dob_source"]
     else:
@@ -1404,13 +1575,29 @@ def decide_person(store, alert, hit, seed, group, screened):
                     break
 
     hit_dobs, dob_origin, dob_phrase, search_ids = gather_hit_dobs(store, hit, hit_countries, is_company)
+
+    def contradicts(item):
+        if not dob_contradicts(customer_dob, item):
+            return False
+        if same_year_risky(customer_dob, item, dob_verified):
+            return False
+        return True
+
     dob_agree = bool(customer_dob and customer_dob.y and any(dob_agrees(customer_dob, item) for item in hit_dobs))
     dob_mismatch = bool(
         customer_dob
         and customer_dob.y
         and hit_dobs
         and not dob_agree
-        and all(dob_contradicts(customer_dob, item) for item in hit_dobs)
+        and all(contradicts(item) for item in hit_dobs)
+    )
+    dob_risky = bool(
+        customer_dob
+        and customer_dob.y
+        and hit_dobs
+        and not dob_agree
+        and not dob_mismatch
+        and any(same_year_risky(customer_dob, item, dob_verified) for item in hit_dobs)
     )
 
     reports = [] if is_company else dated_reports(hit.get("profile_notes"))
@@ -1511,6 +1698,8 @@ def decide_person(store, alert, hit, seed, group, screened):
         is_company=is_company,
         name_agree=name_agree,
         seed=seed,
+        dob_verified=dob_verified,
+        dob_risky=dob_risky,
     )
     evidence = build_evidence(
         decision=decision,
@@ -1575,6 +1764,8 @@ def build_reason(
     is_company,
     name_agree,
     seed,
+    dob_verified=False,
+    dob_risky=False,
 ):
     hit_name = hit.get("name") or "the listed name"
     dob_text = customer_dob.iso() if customer_dob and customer_dob.y else None
@@ -1593,7 +1784,7 @@ def build_reason(
             [
                 sentence(f"The profile marks {hit_name} as deceased but gives no date of death"),
                 agreed,
-                sentence("Without a date of death the hit can be neither cleared as deceased nor confirmed, so it is left for review"),
+                sentence("Without a date of death the hit can be neither cleared as deceased nor confirmed. A profile line that gives the date of death would settle it"),
             ]
         )
 
@@ -1620,79 +1811,101 @@ def build_reason(
                     f"The customer's date of birth {dob_bit} agrees with the hit's {dob_phrase}, and the customer's name agrees with the hit's name {hit_name}"
                 ),
                 sentence(f"The customer is linked only to {cust_places} but the hit is linked only to {hit_places}"),
-                sentence("A country difference does not clear a hit whose name and date of birth agree, so the hit is left for review"),
+                sentence("A country difference does not clear a hit whose name and date of birth agree. A record placing the customer in the hit's country would settle it"),
             ]
         )
 
-    lines = []
+    sentences = {}
     if "TEMPORAL_IMPOSSIBILITY" in applicable and earliest:
         if is_company:
-            lines.append(
-                sentence(
-                    f"The customer was incorporated on {dob_bit}, which is after the hit's earliest dated report on {earliest.iso()}"
-                )
+            sentences["TEMPORAL_IMPOSSIBILITY"] = sentence(
+                f"The customer was incorporated on {dob_bit}, which is after the hit's earliest dated report on {earliest.iso()}"
             )
         else:
-            lines.append(
-                sentence(
-                    f"The customer was born in {customer_dob.y} ({dob_source}), so they were at most {at_most} when the hit's profile reports activity on {earliest.iso()}"
-                )
+            sentences["TEMPORAL_IMPOSSIBILITY"] = sentence(
+                f"The customer was born in {customer_dob.y} ({dob_source}), so they were at most {at_most} when the hit's profile reports activity on {earliest.iso()}"
             )
     if "DECEASED" in applicable and death and screened_on:
-        lines.append(
-            sentence(
-                f"The hit profile gives a date of death of {death.iso()}, which is before the customer was screened on {screened_on.iso()}"
-            )
+        sentences["DECEASED"] = sentence(
+            f"The hit profile gives a date of death of {death.iso()}, which is before the customer was screened on {screened_on.iso()}"
         )
     if "DOB_MISMATCH" in applicable:
+        fact = "birth date" if "-" in (dob_phrase or "") else "birth year"
         if dob_origin == "notes":
-            contrary = f"the hit's profile notes put its birth year at {dob_phrase}"
+            contrary = f"the hit's profile notes put its {fact} at {dob_phrase}"
         elif dob_origin == "search":
-            contrary = f"the hit's search results put its birth year at {dob_phrase}"
+            contrary = f"the hit's search results put its {fact} at {dob_phrase}"
         else:
             contrary = f"the hit's listed date of birth is {dob_phrase}"
-        lines.append(sentence(f"The customer's date of birth is {dob_bit} but {contrary}"))
+        sentences["DOB_MISMATCH"] = sentence(f"The customer's date of birth is {dob_bit} but {contrary}")
     if "LOCATION_MISMATCH" in applicable:
-        lines.append(
-            sentence(f"The customer is linked only to {cust_places} but the hit is linked only to {hit_places}")
+        sentences["LOCATION_MISMATCH"] = sentence(
+            f"The customer is linked only to {cust_places} but the hit is linked only to {hit_places}"
         )
     if "NAME_MISMATCH_VERIFIED" in applicable:
-        lines.append(
-            sentence(
-                f"The customer's verified name is {compare_name} ({name_source}), which does not match the hit's name {hit_name}"
-            )
+        sentences["NAME_MISMATCH_VERIFIED"] = sentence(
+            f"The customer's verified name is {compare_name} ({name_source}), which does not match the hit's name {hit_name}"
         )
     if "ENTITY_TYPE_MISMATCH" in applicable:
         cust_kind = "a company" if is_company else "an individual"
         hit_kind = "a company" if company_flag(hit.get("entity_type")) else "an individual"
-        lines.append(sentence(f"The customer is {cust_kind} but the hit is {hit_kind}, so they cannot be the same entity"))
-    if len(lines) == 1:
-        lines.append(second_fact(code, hit_name, cust_places, hit_places, dob_bit, dob_phrase, compare_name, earliest, at_most))
-    if lines:
+        sentences["ENTITY_TYPE_MISMATCH"] = sentence(
+            f"The customer is {cust_kind} but the hit is {hit_kind}, so they cannot be the same entity"
+        )
+    if sentences:
+        # The chosen reason code leads. Other contradictions follow, without repeating it.
+        order = [
+            "ENTITY_TYPE_MISMATCH",
+            "DECEASED",
+            "TEMPORAL_IMPOSSIBILITY",
+            "DOB_MISMATCH",
+            "LOCATION_MISMATCH",
+            "NAME_MISMATCH_VERIFIED",
+        ]
+        lines = []
+        if code in sentences:
+            lines.append(sentences[code])
+        for key in order:
+            if key != code and key in sentences:
+                lines.append(sentences[key])
+        if len(lines) == 1:
+            lines.append(second_fact(code, hit_name, cust_places, hit_places, dob_bit, dob_phrase, compare_name, earliest, at_most))
         return " ".join(lines[:4])
 
-    # REVIEW
+    # REVIEW. Say what is missing, then the document that would settle it.
+    if dob_risky and not dob_verified:
+        missing = f"The customer date {dob_bit} is not on an approved identity check, and the hit date {dob_phrase} differs only by month or day in the same year"
+        document = "An approved identity document with the date of birth would settle it"
+    elif dob_risky:
+        missing = f"The customer date {dob_bit} and the hit date {dob_phrase} differ only by month or day in the same year, and a 1 January listing or a swapped day and month is not a safe clearance"
+        document = "An identity document whose date matches the hit exactly would settle it"
+    elif not dob_text and dob_origin == "none":
+        missing = "The customer has no date of birth, and the hit has no date of birth, no age in the first paragraph, and no qualifying search result"
+        document = "An approved identity document with a date of birth would settle it"
+    elif dob_text and dob_origin == "none":
+        missing = f"The hit has no date of birth, no age in the first paragraph, and no qualifying search result, so {dob_bit} cannot be compared"
+        document = "A listed date of birth for the hit would settle it"
+    elif not dob_text and dob_phrase:
+        missing = f"The customer has no date of birth to set against the hit date {dob_phrase}"
+        document = "An approved identity document with a date of birth would settle it"
+    elif dob_text and dob_phrase:
+        missing = f"The customer date {dob_bit} and the hit date {dob_phrase} are too close to contradict and do not agree"
+        document = "A full date of birth on both sides would settle it"
+    else:
+        missing = f"Hit {hit.get('hit_id')} has no contradiction and no confirming date of birth"
+        document = "An approved identity document with a date of birth would settle it"
     lines = []
     if shared and name_agree:
         lines.append(sentence(f"Both the customer and the hit are linked to {shared}"))
         lines.append(sentence(f"The customer's name agrees with the hit's name {hit_name}"))
-        lines.append(
-            sentence(
-                "Nothing in the customer's records contradicts the hit, and the date of birth cannot be compared with it, so the hit can be neither cleared nor confirmed"
-            )
-        )
-        return " ".join(lines)
-    if name_agree:
+    elif name_agree:
         lines.append(sentence(f"The customer's name agrees with the hit's name {hit_name}"))
     elif compare_name:
         lines.append(sentence(f"The customer name on file is {compare_name}"))
     else:
         lines.append(sentence(f"The hit name is {hit_name}"))
-    if dob_text:
-        lines.append(sentence(f"The customer's date of birth {dob_bit} cannot be settled against the hit"))
-    else:
-        lines.append(sentence("The customer's date of birth is not on file and cannot be compared with the hit"))
-    lines.append(sentence(f"The evidence does not contradict hit {hit.get('hit_id')} and does not confirm it, so it is left for review"))
+    lines.append(sentence(missing))
+    lines.append(sentence(document))
     return " ".join(lines[:4])
 
 
@@ -1722,7 +1935,7 @@ def build_evidence(
             evidence.add(facts["country_source"])
         if used_search:
             evidence.update(search_ids)
-    if "LOCATION_MISMATCH" in applicable or "TEMPORAL_IMPOSSIBILITY" in applicable and record_sources:
+    if "LOCATION_MISMATCH" in applicable:
         for record_id, _countries in record_sources:
             evidence.add(record_id)
         if facts["country_source"]:
@@ -1755,6 +1968,9 @@ def build_evidence(
                 evidence.add(dob_source)
             if used_search:
                 evidence.update(search_ids)
+    # A review with nothing else to cite still names the customer record it used.
+    if decision == "REVIEW" and seed and not evidence:
+        evidence.add(seed)
     # A citation must be an id, never a bare null.
     return sorted(item for item in evidence if item)
 
@@ -2058,37 +2274,75 @@ def _model_downgrade(row, hit, store):
     return row
 
 
-def run(data_dir, output_path):
-    started = time.time()
-    store = Store(data_dir)
-    hits = sorted(store.hits, key=lambda row: row["hit_id"])
-    counts = defaultdict(int)
-    answered = {}
-    logs = []
-    for hit in hits:
-        try:
-            row = resolve_hit(store, hit)
-        except Exception as error:
-            sys.stderr.write(f"error {hit.get('hit_id')}: {error}\n")
-            row = _failsafe(hit)
-        if not row or not row.get("hit_id") or row.get("decision") not in _CODE_DECISION.values():
-            row = _failsafe(hit)
-        row, log = apply_jev(row, store)
-        row = _model_downgrade(row, hit, store)
-        answered[row["hit_id"]] = row
-        logs.append(log)
-    for hit in hits:
-        if hit["hit_id"] not in answered:
-            answered[hit["hit_id"]] = _failsafe(hit)
-            logs.append({"hit_id": hit["hit_id"], "judge": None, "evaluate": {"agrees": False, "note": "no answer"}, "verify": {"ok": False, "note": "missing"}, "downgraded": True, "name_agree": False, "dob_agree": False})
+def _write_rows(output_path, hits, answered, logs):
     side = str(output_path) + ".jev.jsonl" if not str(output_path).endswith(".jsonl") else str(output_path)[:-6] + ".jev.jsonl"
+    counts = defaultdict(int)
     with open(output_path, "w", encoding="utf-8") as handle, open(side, "w", encoding="utf-8") as jev_handle:
         for hit in hits:
-            row = answered[hit["hit_id"]]
+            row = answered.get(hit["hit_id"]) or _failsafe(hit)
             counts[row["decision"]] += 1
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
         for log in logs:
             jev_handle.write(json.dumps(log, ensure_ascii=False) + "\n")
+    return counts
+
+
+def run(data_dir, output_path):
+    started = time.time()
+    try:
+        import llm
+        llm.reset_budget()
+    except Exception:
+        pass
+    store = None
+    try:
+        store = Store(data_dir)
+        hits = sorted(store.hits, key=lambda row: row["hit_id"])
+    except Exception as error:
+        sys.stderr.write(f"load error: {error}\n")
+        hits = sorted(read_jsonl(f"{data_dir}/hits.jsonl"), key=lambda row: row.get("hit_id") or "")
+        hits = [row for row in hits if row.get("hit_id")]
+        store = None
+    answered = {}
+    logs = []
+    blank = {"judge": None, "evaluate": {"agrees": False, "note": "no answer"}, "verify": {"ok": False, "note": "missing"}, "downgraded": True, "name_agree": False, "dob_agree": False}
+    for hit in hits:
+        log = dict(blank)
+        log["hit_id"] = hit.get("hit_id")
+        if store is None:
+            row = _failsafe(hit)
+        else:
+            try:
+                row = resolve_hit(store, hit)
+            except Exception as error:
+                sys.stderr.write(f"error {hit.get('hit_id')}: {error}\n")
+                row = _failsafe(hit)
+            if not row or not row.get("hit_id") or row.get("decision") not in _CODE_DECISION.values():
+                row = _failsafe(hit)
+            try:
+                row, log = apply_jev(row, store)
+                row = _model_downgrade(row, hit, store)
+            except Exception as error:
+                sys.stderr.write(f"error {hit.get('hit_id')}: {error}\n")
+                row = _failsafe(hit)
+                log = dict(blank)
+                log["hit_id"] = hit.get("hit_id")
+        if not row or not row.get("hit_id"):
+            row = _failsafe(hit)
+        answered[hit["hit_id"]] = row
+        logs.append(log)
+    for hit in hits:
+        if hit["hit_id"] not in answered:
+            answered[hit["hit_id"]] = _failsafe(hit)
+            missing = dict(blank)
+            missing["hit_id"] = hit["hit_id"]
+            logs.append(missing)
+    try:
+        counts = _write_rows(output_path, hits, answered, logs)
+    except Exception as error:
+        sys.stderr.write(f"write error: {error}\n")
+        answered = {hit["hit_id"]: _failsafe(hit) for hit in hits}
+        counts = _write_rows(output_path, hits, answered, logs)
     elapsed = time.time() - started
     downgraded = sum(1 for log in logs if log.get("downgraded"))
     sys.stderr.write(
@@ -2124,6 +2378,8 @@ def self_test():
     assert not names_agree(name_parts("Markus Gerhard Mueller", False), name_parts("Mark Mueller", False))
     assert names_agree(name_parts("Starling Bank GmbH", True), name_parts("Sterling Bank & Trust Co.", True))
     assert names_agree(name_parts("Abdulsalam", False), name_parts("Abdul Salam", False))
+    assert names_agree(name_parts("Blue Grass", False), name_parts("Bluegrass Craft Coffee", False))
+    assert not names_agree(name_parts("Blue Grass Holdings", False), name_parts("Bluegrass Craft Coffee Roasters", False))
     assert names_agree(name_parts("Giampiero Fiorani", False), name_parts("Gianpiero Fiorani", False))
     # Rule 8 edges that do not need the full variant file.
     assert not parts_match("sam", "pam")
@@ -2147,6 +2403,14 @@ def self_test():
         assert len(name_parts("NA", False)) < 2
     years = ages_in_text("November 1998 saw Elvira Velasco Morillo, a 30-year-old, face charges.")
     assert years == [1967, 1968], years
+    assert ages_in_text("November 1981 marked the date Pere Punti, then 37, was placed under charge.") == [1943, 1944]
+    assert ages_in_text("Pere Punti reached 37 years of age by November 1981, the time he was charged.") == [1943, 1944]
+    assert ages_in_text("Aged 45 at the time of the March 2019 report.") == [1973, 1974]
+    assert ages_in_text("He was forty-five in March 2019.") == [1973, 1974]
+    born = birth_dates_in_text("Christian Zaum was born on 30 June 1969.")
+    assert [item.iso() for item in born] == ["1969-06-30"], born
+    born = birth_dates_in_text("Martin Austin KAALUND was born in 1973.")
+    assert [item.iso() for item in born] == ["1973"], born
     reports = dated_reports("According to the thenews.com.pk; January 08, 2020: In January 2020, Abdul Rahman was arrested.")
     assert reports and reports[0].iso() == "2020-01-08"
     note = "Verified via Veriff on 2023-09-15: passport from Spain, name ELVIRA VELASCO MORILLO, DOB 05/03/1968."
@@ -2154,6 +2418,15 @@ def self_test():
     assert parsed["name"] == "ELVIRA VELASCO MORILLO", parsed
     assert parsed["dob"].iso() == "1968-03-05"
     assert parsed["country"] == "Spain"
+    assert parse_identity_note("Onfido could not verify the passport for JANE DOE, DOB 01/02/1990. The check failed.") is None
+    assert parse_identity_note("Rejected Sumsub check: passport, name JANE DOE, DOB 01/02/1990.") is None
+    june = parse_date("1962-06-10")
+    september = parse_date("1962-09-10")
+    assert same_year_risky(june, september, False)
+    assert not same_year_risky(june, september, True)
+    assert same_year_risky(parse_date("1985-01-03"), parse_date("1985-01-01"), True)
+    assert same_year_risky(parse_date("1962-06-10"), parse_date("1962-10-06"), True)
+    assert not same_year_risky(parse_date("1988-05-15"), parse_date("1988-05-17"), True)
     print("self-test ok")
 
 
@@ -2166,7 +2439,14 @@ def main():
     if len(sys.argv) != 3:
         sys.stderr.write("usage: system/run <data_dir> <output_file>\n")
         sys.exit(2)
-    run(sys.argv[1], sys.argv[2])
+    try:
+        run(sys.argv[1], sys.argv[2])
+    except Exception as error:
+        sys.stderr.write(f"run error: {error}\n")
+        hits = [row for row in read_jsonl(f"{sys.argv[1]}/hits.jsonl") if row.get("hit_id")]
+        hits.sort(key=lambda row: row["hit_id"])
+        answered = {hit["hit_id"]: _failsafe(hit) for hit in hits}
+        _write_rows(sys.argv[2], hits, answered, [])
 
 
 if __name__ == "__main__":

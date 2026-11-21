@@ -4,17 +4,24 @@
 Provider order, first key wins:
 
 1. OPENROUTER_API_KEY -> https://openrouter.ai/api/v1
-   Typed questions use typesafe/jev-router. Reasons use x-ai/grok-4.
+   Objections use the pinned id typesafe/jev-router.
+   Reason wording uses the pinned id x-ai/grok-4.3.
 2. XAI_API_KEY -> https://api.x.ai/v1 (OpenAI-compatible)
-   Jev is not hosted here, so the same typed JSON question goes to grok-4.
+   The same typed question goes to the pinned id grok-4.3.
    That call is still not a free-form decision.
 3. Neither key -> every function returns None and the rules stand.
 
-A birth year or a rewritten reason is kept only when the model's confidence
-is at least 60/63 (about 95%). Anything lower, or any error, is ignored.
-Successful responses are cached by the hash of the request, under
-system/.llm-cache/, which is gitignored. Keys are read from the environment
-and are never written to disk.
+The model may only object to a clearance. It cannot supply a birth year or
+any other fact that would create DIFFERENT_ENTITY or SAME_ENTITY. An objection
+is kept only when its confidence is at least 60/63 and its quote is copied
+from the source. Anything lower, or any error, leaves the rules in place.
+
+Calls use seed 1 (xAI rejects seed 0). Temperature is 0. Each call waits at
+most 8 seconds. The whole run stops calling after 120 calls or 10 minutes,
+whichever comes first, and the remaining hits stay on the rules. Successful
+responses are cached by the hash of the request, under system/.llm-cache/,
+which is gitignored. Failures are not cached. Keys are read from the
+environment and are never written to disk or logged.
 """
 
 from __future__ import annotations
@@ -23,13 +30,32 @@ import hashlib
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 
 CLEAR_CONFIDENCE = 60 / 63
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".llm-cache")
+# Pinned ids. Aliases such as grok-4 move when the provider ships a new model.
+PINNED_JEV_MODEL = "typesafe/jev-router"
+PINNED_GROK_MODEL = "x-ai/grok-4.3"
+PINNED_XAI_MODEL = "grok-4.3"
+CALL_TIMEOUT = 8
+MAX_CALLS = 120
+MAX_WALL_SECONDS = 10 * 60
 
-_AGEISH = re.compile(r"year-old|years old|aged\s+\d|age of\s+\d|\bwas\s+\d{1,2}\b", re.I)
+_calls = 0
+_wall = 0.0
+
+def reset_budget():
+    """Start a run's model clock. Called once from the engine, before any hit."""
+    global _calls, _wall
+    _calls = 0
+    _wall = 0.0
+
+
+def budget_open():
+    return _calls < MAX_CALLS and _wall < MAX_WALL_SECONDS
 
 
 def endpoint():
@@ -42,12 +68,12 @@ def endpoint():
             "base": "https://openrouter.ai/api/v1",
             "key": openrouter,
             "provider": "openrouter",
-            "typed_model": os.environ.get("JEV_MODEL", "typesafe/jev-router"),
-            "reason_model": os.environ.get("GROK_MODEL", "x-ai/grok-4"),
+            "typed_model": os.environ.get("JEV_MODEL", PINNED_JEV_MODEL),
+            "reason_model": os.environ.get("GROK_MODEL", PINNED_GROK_MODEL),
         }
     xai = os.environ.get("XAI_API_KEY", "").strip()
     if xai:
-        model = os.environ.get("XAI_MODEL", "grok-4")
+        model = os.environ.get("XAI_MODEL", PINNED_XAI_MODEL)
         return {
             "base": "https://api.x.ai/v1",
             "key": xai,
@@ -112,12 +138,18 @@ def _post(ep, body):
         },
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=25) as response:
+    with urllib.request.urlopen(request, timeout=CALL_TIMEOUT) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
+def _charge(started):
+    global _calls, _wall
+    _calls += 1
+    _wall += time.time() - started
+
+
 def complete_json(kind, system, user):
-    """Cached temperature-0 JSON completion. None when there is no key or the call fails."""
+    """Cached temperature-0 JSON completion. None when there is no key, no budget, or the call fails."""
     ep = endpoint()
     if ep is None:
         return None
@@ -136,21 +168,40 @@ def complete_json(kind, system, user):
     cached = _read_cache(digest)
     if cached is not None:
         return cached
+    if not budget_open():
+        return None
+    # seed 1: xAI rejects 0. If a provider still rejects the field, retry once without it.
     body = {
         "model": model,
         "temperature": 0,
-        "seed": 0,
+        "seed": 1,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
     }
+    started = time.time()
     try:
-        raw = _post(ep, body)
+        try:
+            raw = _post(ep, body)
+        except urllib.error.HTTPError as error:
+            detail = ""
+            try:
+                detail = error.read().decode("utf-8", "replace")[:240].lower()
+            except Exception:
+                detail = ""
+            if error.code == 400 and "seed" in detail:
+                body.pop("seed", None)
+                raw = _post(ep, body)
+            else:
+                _charge(started)
+                return None
         content = raw["choices"][0]["message"]["content"]
         parsed = _extract_json(content)
     except (urllib.error.URLError, TimeoutError, KeyError, IndexError, TypeError, json.JSONDecodeError, ValueError):
+        _charge(started)
         return None
+    _charge(started)
     if not isinstance(parsed, dict):
         return None
     _write_cache(digest, parsed)
@@ -170,42 +221,14 @@ def _confidence(parsed):
 
 
 def birth_years(text):
-    """Two possible birth years from an age-at-a-date sentence the rules did not parse.
+    """Closed. Birth years come from the deterministic parser in the engine.
 
-    Returns a sorted list of years, or None. None leaves the deterministic
-    path unchanged. A low-confidence answer is not used to clear a hit.
+    A model year used to become a date of birth, and that date could clear a
+    hit or confirm one. The model's own confidence number is not a fact.
+    Returning None means a caller cannot turn a completion into DIFFERENT_ENTITY
+    or SAME_ENTITY. Objections go through downgrade_clearance instead.
     """
-    if not text or not _AGEISH.search(text):
-        return None
-    if endpoint() is None:
-        return None
-    parsed = complete_json(
-        "typed",
-        (
-            "You extract birth years. Reply with JSON only: "
-            '{"birth_years": [<int>, <int>], "confidence": <0 to 1>}. '
-            "If the text gives a person's age at a date, birth_years must be "
-            "year-age and year-age-1. If it does not, return an empty list and "
-            "confidence 0. Do not decide whether two people are the same."
-        ),
-        text[:2000],
-    )
-    if not parsed:
-        return None
-    confidence = _confidence(parsed)
-    if confidence is None or confidence < CLEAR_CONFIDENCE:
-        return None
-    years = []
-    for item in parsed.get("birth_years") or []:
-        try:
-            year = int(item)
-        except (TypeError, ValueError):
-            continue
-        if 1800 < year < 2100 and year not in years:
-            years.append(year)
-    if not years:
-        return None
-    return sorted(years)
+    return None
 
 
 def downgrade_clearance(profile_notes, reason):
