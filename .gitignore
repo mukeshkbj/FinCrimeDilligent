@@ -17,6 +17,5 @@ docs/internal/
 data/internal/
 .omc/
 system/.llm-cache/
-output/*
-!output/.keep
+output/.llm-cache/
 .claude/

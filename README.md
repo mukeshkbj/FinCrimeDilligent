@@ -58,7 +58,7 @@ python3 validate.py --data <data_dir> --output <output_file> --score <data_dir>/
 python3 ui/serve.py <data_dir> <output_file> [port]
 ```
 
-`data_dir` is the official room (`alerts.jsonl`, `hits.jsonl`, `customers.jsonl`, `accounts.jsonl`, `onboarding.jsonl`, `kyc_checks.jsonl`, `notes.jsonl`, `search_results.jsonl`, `name_variants.json`). Run predictions into `output/` locally (that folder is gitignored). Do not commit `dev/` or `output/`.
+`data_dir` is the official room (`alerts.jsonl`, `hits.jsonl`, `customers.jsonl`, `accounts.jsonl`, `onboarding.jsonl`, `kyc_checks.jsonl`, `notes.jsonl`, `search_results.jsonl`, `name_variants.json`). The committed predictions are `output/dev.jsonl`. Do not commit `dev/`.
 
 Python 3 standard library only. Decisions are deterministic rules only; no model decides. Grok writes the reason wording, checked against the record. A full development run is about 4 seconds and does not use the network.
 
