@@ -1,0 +1,113 @@
+{
+  "note": "The plain fuzzy matcher is one we built for comparison: whole-name similarity of 85% or more.",
+  "matchers": {
+    "full": {
+      "label": "full",
+      "title": "Our matcher",
+      "right": 50,
+      "labels": 50,
+      "unsafe": 0,
+      "decision_score": 100.0
+    },
+    "plain": {
+      "label": "plain",
+      "title": "Plain fuzzy matcher",
+      "right": 47,
+      "labels": 50,
+      "unsafe": 3,
+      "decision_score": 0.0,
+      "changed": 145,
+      "by_transition": {
+        "REVIEW→DIFFERENT_ENTITY": 103,
+        "SAME_ENTITY→DIFFERENT_ENTITY": 41,
+        "SAME_ENTITY→REVIEW": 1
+      },
+      "cleared_examples": [
+        "H-03D0E6",
+        "H-05C815",
+        "H-060092"
+      ],
+      "examples": [
+        {
+          "hit_id": "H-03D0E6",
+          "list_name": "Umar, Zubaida Abubakar",
+          "decision": "DIFFERENT_ENTITY",
+          "reason_code": "NAME_MISMATCH_VERIFIED",
+          "reason": "Verified name ABUBAKAR CHINEDU UMAR (KYC-944EB8, approved 2024-11-17) does not match list name Umar, Zubaida Abubakar (H-03D0E6 primary_name). Records used: KYC-944EB8."
+        },
+        {
+          "hit_id": "H-05C815",
+          "list_name": "James Oliver",
+          "decision": "DIFFERENT_ENTITY",
+          "reason_code": "NAME_MISMATCH_VERIFIED",
+          "reason": "Verified name OLIVER BRIAN JAMES (NOTE-AC9D10, approved 2025-06-01) does not match list name James Oliver (H-05C815 primary_name). Records used: NOTE-AC9D10."
+        },
+        {
+          "hit_id": "H-060092",
+          "list_name": "Robert James",
+          "decision": "DIFFERENT_ENTITY",
+          "reason_code": "NAME_MISMATCH_VERIFIED",
+          "reason": "Verified name ROBERT JAMES KEVIN KOWALCZYK (NOTE-BCDE4B, approved 2023-02-17) does not match list name Robert James (H-060092 primary_name). Records used: NOTE-BCDE4B."
+        }
+      ],
+      "demo_examples": [
+        {
+          "hit_id": "H-05C815",
+          "list_name": "James Oliver",
+          "decision": "DIFFERENT_ENTITY",
+          "reason_code": "NAME_MISMATCH_VERIFIED",
+          "reason": "Verified name OLIVER BRIAN JAMES (NOTE-AC9D10, approved 2025-06-01) does not match list name James Oliver (H-05C815 primary_name). Records used: NOTE-AC9D10."
+        },
+        {
+          "hit_id": "H-060092",
+          "list_name": "Robert James",
+          "decision": "DIFFERENT_ENTITY",
+          "reason_code": "NAME_MISMATCH_VERIFIED",
+          "reason": "Verified name ROBERT JAMES KEVIN KOWALCZYK (NOTE-BCDE4B, approved 2023-02-17) does not match list name Robert James (H-060092 primary_name). Records used: NOTE-BCDE4B."
+        }
+      ]
+    },
+    "novar": {
+      "label": "novar",
+      "title": "Without name variants",
+      "right": 50,
+      "labels": 50,
+      "unsafe": 0,
+      "decision_score": 100.0,
+      "changed": 14,
+      "by_transition": {
+        "DIFFERENT_ENTITY→REVIEW": 10,
+        "REVIEW→DIFFERENT_ENTITY": 3,
+        "SAME_ENTITY→REVIEW": 1
+      },
+      "cleared_examples": [
+        "H-A81AFA",
+        "H-B47A06",
+        "H-F93F3C"
+      ],
+      "examples": [
+        {
+          "hit_id": "H-A81AFA",
+          "list_name": "Robbie James",
+          "decision": "DIFFERENT_ENTITY",
+          "reason_code": "NAME_MISMATCH_VERIFIED",
+          "reason": "Verified name ROBERT JAMES KEVIN KOWALCZYK (NOTE-BCDE4B, approved 2023-02-17) does not match list name Robbie James (H-A81AFA primary_name). Records used: NOTE-BCDE4B."
+        },
+        {
+          "hit_id": "H-B47A06",
+          "list_name": "Gareth Wynn",
+          "decision": "DIFFERENT_ENTITY",
+          "reason_code": "NAME_MISMATCH_VERIFIED",
+          "reason": "Verified name Gareth Wyn Llewellyn (KYC-091221, approved 2025-03-28) does not match list name Gareth Wynn (H-B47A06 primary_name). Records used: KYC-091221."
+        },
+        {
+          "hit_id": "H-F93F3C",
+          "list_name": "Faroq, Umar",
+          "decision": "DIFFERENT_ENTITY",
+          "reason_code": "LOCATION_MISMATCH",
+          "reason": "Customer countries Nigeria (CUS-553062 residence_country/nationality) do not overlap hit countries United Kingdom (H-F93F3C addresses). KYC-42C199 gives the document country Nigeria."
+        }
+      ]
+    }
+  }
+}

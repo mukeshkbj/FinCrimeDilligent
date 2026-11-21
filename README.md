@@ -32,19 +32,21 @@ on right decisions: reason code 100%, customer record 100%
 ```
 
 ```bash
-python3 ui/serve.py dev output/dev.jsonl   # opens http://127.0.0.1:8765/
+python3 ui/serve.py dev output/dev.jsonl
+# prints: screening desk on http://127.0.0.1:8765/
+# open that URL yourself (optional port: … 8766)
 ```
 
-Displays that file and does not score or rewrite it. The process prints `screening desk on http://127.0.0.1:8765`. The page opens on the workflow: alert, customer found, identity, comparison, and the decision. A funnel above it counts hits, customers found, cleared, kept open, and sent to review from the output file. The compare stage shows the list name with the original script beside it when the file has one. Cited record ids in the reason are shown as source chips. Simple and Detailed stay on the same page.
+Displays that file and does not score or rewrite it. The process prints `screening desk on http://127.0.0.1:8765/` and waits; it does not open a browser window. If the port is busy it exits with an error and suggests another port — it will not silently share a port with another app. The page opens on the workflow: alert, customer found, identity, comparison, and the decision. A funnel above it counts hits, customers found, cleared, sent to compliance, and sent to review from the output file. The compare stage shows the list name with the original script beside it when the file has one. Cited record ids in the reason are shown as source chips. Simple and Detailed stay on the same page.
 
 ### Try these hits
 
-Open `http://127.0.0.1:8765/?hit=H-2808BE` (or the other ids). The one-line reason is the sentence in `output/dev.jsonl`.
+Open `http://127.0.0.1:8765/?hit=H-2808BE` (or the other ids; use the port printed by `ui/serve.py`). The one-line reason is the sentence in `output/dev.jsonl`.
 
 | Hit | Result | Reason |
 |---|---|---|
 | `H-2808BE` | Cleared | Verified name CHINEDU AZEEZ (KYC-20EE17, approved 2023-07-23) does not match list name Ridwan, Azeez (H-2808BE primary_name). |
-| `H-80B4B5` | Kept open | DOB 1977-01-11 (NOTE-23FC8E, approved 2025-02-02) agrees with hit DOB 1976 or 1977 (SR-01BFC3 snippet); name agrees with Jérôme Kerviel (H-80B4B5 primary_name). |
+| `H-80B4B5` | Sent to compliance | DOB 1977-01-11 (NOTE-23FC8E, approved 2025-02-02) agrees with hit DOB 1976 or 1977 (SR-01BFC3 snippet); name agrees with Jérôme Kerviel (H-80B4B5 primary_name). |
 | `H-FF3096` | Review | Customer DOB 1965-05-19 (NOTE-588201, approved 2024-10-06) cannot be compared: hit DOB is not on the list entry (H-FF3096 dobs). |
 | `H-B47A06` | Review, original script on the list name | Arabic alias غاريث وين (H-B47A06 aliases) may transliterate to Gareth Wyn; verified name Gareth Wyn Llewellyn (KYC-091221, approved 2025-03-28), so not cleared on name. |
 
@@ -53,10 +55,10 @@ Open `http://127.0.0.1:8765/?hit=H-2808BE` (or the other ids). The one-line reas
 ```bash
 system/run <data_dir> <output_file>
 python3 validate.py --data <data_dir> --output <output_file> --score <data_dir>/practice_labels.jsonl
-python3 ui/serve.py <data_dir> <output_file>
+python3 ui/serve.py <data_dir> <output_file> [port]
 ```
 
-`data_dir` is the official room (`alerts.jsonl`, `hits.jsonl`, `customers.jsonl`, `accounts.jsonl`, `onboarding.jsonl`, `kyc_checks.jsonl`, `notes.jsonl`, `search_results.jsonl`, `name_variants.json`). The committed predictions are `output/dev.jsonl`. Do not commit `dev/`.
+`data_dir` is the official room (`alerts.jsonl`, `hits.jsonl`, `customers.jsonl`, `accounts.jsonl`, `onboarding.jsonl`, `kyc_checks.jsonl`, `notes.jsonl`, `search_results.jsonl`, `name_variants.json`). Run predictions into `output/` locally (that folder is gitignored). Do not commit `dev/` or `output/`.
 
 Python 3 standard library only. Decisions are deterministic rules only; no model decides. Grok writes the reason wording, checked against the record. A full development run is about 4 seconds and does not use the network.
 
@@ -74,7 +76,7 @@ Python 3 standard library only. Decisions are deterministic rules only; no model
 | Customer record, given the right decision | 100% |
 | Evidence set against the practice labels | 50 / 50 |
 | Repeat run | byte-identical across five runs |
-| All 819 hits | 457 cleared, 124 kept open, 238 left for review |
+| All 819 hits | 457 cleared, 124 sent to compliance, 238 left for review |
 
 The decision score is the share of cost saved against sending every hit to review. Clearing a true `SAME_ENTITY` or `REVIEW` costs 60, so the engine clears only on an explicit SOP contradiction. A support note that names the hit's country blocks a location clear. A same-year month or day clash on an unverified customer date, a 1 January hit date, or a day/month swap is left for review.
 

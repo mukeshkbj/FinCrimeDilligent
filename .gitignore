@@ -1,6 +1,7 @@
 # Development data room and secrets. The scored system reads a data
 # directory at runtime and does not need these files in git.
 dev/
+dev
 *.xlsx
 .env
 .env.*
@@ -16,5 +17,6 @@ docs/internal/
 data/internal/
 .omc/
 system/.llm-cache/
-output/.llm-cache/
+output/*
+!output/.keep
 .claude/
