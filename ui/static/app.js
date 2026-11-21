@@ -1,6 +1,32 @@
 "use strict";
 
-const state = { steps: [], index: 0, view: "simple", timer: null };
+const state = { steps: [], index: 0, view: "workflow", timer: null };
+
+function esc(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;",
+  }[ch]));
+}
+
+function withChips(value) {
+  const text = String(value ?? "");
+  const re = /\(((?:H|A|CUS|KYC|NOTE|SR|ACC|APP)-[0-9A-Za-z]+)([^)]*)\)/g;
+  let html = "";
+  let last = 0;
+  let match;
+  while ((match = re.exec(text))) {
+    html += esc(text.slice(last, match.index));
+    const rest = match[2].replace(/^,\s*/, "").trim();
+    html += `<span class="chip">${esc(match[1])}${rest ? `<span class="chip-meta">${esc(rest)}</span>` : ""}</span>`;
+    last = match.index + match[0].length;
+  }
+  html += esc(text.slice(last));
+  return html;
+}
+
+function chipId(id) {
+  return `<span class="chip">${esc(id)}</span>`;
+}
 
 function $(id) { return document.getElementById(id); }
 
@@ -29,7 +55,28 @@ function applyTheme(choice) {
   try { localStorage.setItem("desk-theme", choice); } catch (error) { /* storage blocked */ }
 }
 
+function renderFunnel(summary) {
+  const funnel = summary.funnel || {};
+  const steps = [
+    [funnel.hits, "Hits"],
+    [funnel.customer_found, "Customer found"],
+  ];
+  const outcomes = [
+    ["cleared", funnel.cleared, "Cleared"],
+    ["kept", funnel.kept_open, "Kept open"],
+    ["review", funnel.review, "Sent to review"],
+  ];
+  const main = steps.map(([count, label]) =>
+    `<div class="funnel-step"><strong>${esc(count)}</strong><span>${esc(label)}</span></div>`
+  ).join('<span class="funnel-arrow" aria-hidden="true">→</span>');
+  const split = outcomes.map(([kind, count, label]) =>
+    `<div class="outcome-tile ${kind}"><strong>${esc(count)}</strong><span>${esc(label)}</span></div>`
+  ).join("");
+  $("funnel-row").innerHTML = `${main}<span class="funnel-arrow" aria-hidden="true">→</span><div class="funnel-outcomes">${split}</div>`;
+}
+
 function renderSummary(summary) {
+  renderFunnel(summary);
   const totals = summary.totals || {};
   const practice = summary.practice || {};
   const repro = summary.repro || {};
@@ -76,12 +123,60 @@ function fieldsTable(items) {
   }).join("");
 }
 
+function linesHtml(lines) {
+  return (lines || []).map((line) => `<dt>${esc(line.label)}</dt><dd>${withChips(line.value)}</dd>`).join("");
+}
+
+function renderWorkflow(flow) {
+  const panel = $("panel-workflow");
+  if (!panel) return;
+  if (!flow || !flow.stages) {
+    panel.innerHTML = "<p>not available</p>";
+    return;
+  }
+  const decision = flow.decision || "";
+  const plain = decision === "DIFFERENT_ENTITY" ? "Cleared" : decision === "SAME_ENTITY" ? "Kept open" : decision === "REVIEW" ? "Sent to review" : decision;
+  const stages = flow.stages.map((stage, index) => {
+    let body = "";
+    if (stage.rows) {
+      body = stage.rows.map((row) => `
+        <div class="compare-row">
+          <strong>${esc(row.field)}</strong>
+          <span class="mark mark-${esc(row.mark)}">${esc(row.mark)}</span>
+          <div><span class="side-note">Customer</span> ${withChips(row.customer)}</div>
+          <div><span class="side-note">List</span> ${withChips(row.list)}</div>
+          ${row.note ? `<div class="side-note">${withChips(row.note)}</div>` : ""}
+        </div>`).join("");
+    } else if (stage.key === "decision") {
+      const ids = (stage.evidence || []).length ? stage.evidence.map(chipId).join(" ") : "not available";
+      body = `
+        <p class="dec-word dec-${esc(stage.decision)}">${esc(stage.decision)}</p>
+        <dl>
+          <dt>Reason code</dt><dd>${esc(stage.reason_code)}</dd>
+          <dt>Reason</dt><dd class="reason">${withChips(stage.reason)}</dd>
+          <dt>Evidence</dt><dd>${ids}</dd>
+        </dl>`;
+    } else {
+      body = `<dl>${linesHtml(stage.lines)}</dl>`;
+    }
+    const arrow = index === 0 ? "" : '<div class="stage-arrow" aria-hidden="true">→</div>';
+    return `${arrow}<article class="stage"><h3><span class="n">${stage.n}</span> ${esc(stage.title)}</h3>${body}</article>`;
+  }).join("");
+  panel.innerHTML = `
+    <div class="wf-head">
+      <p class="card-kicker">${esc(flow.hit_id)} · ${esc(plain)}</p>
+      <h2>${esc(flow.list_name || "")}</h2>
+    </div>
+    <div class="pipeline">${stages}</div>`;
+}
+
 function renderStep() {
   const step = state.steps[state.index];
   if (!step) return;
   renderRail();
   const simple = step.simple;
   const detailed = step.detailed;
+  renderWorkflow(detailed && detailed.workflow);
   const initials = (simple.screened_name || "?").split(" ").map((part) => part[0]).join("").slice(0, 2);
   $("panel-simple").innerHTML = `
     <article class="card now">
@@ -137,8 +232,10 @@ function renderStep() {
 
 function showView(name) {
   state.view = name;
+  $("panel-workflow").hidden = name !== "workflow";
   $("panel-simple").hidden = name !== "simple";
   $("panel-detailed").hidden = name !== "detailed";
+  $("tab-workflow").setAttribute("aria-selected", name === "workflow" ? "true" : "false");
   $("tab-simple").setAttribute("aria-selected", name === "simple" ? "true" : "false");
   $("tab-detailed").setAttribute("aria-selected", name === "detailed" ? "true" : "false");
 }
@@ -153,7 +250,7 @@ async function loadQueue(filter) {
 
 async function openHit(hitId) {
   const body = await getJSON("/api/hit/" + encodeURIComponent(hitId));
-  showView("detailed");
+  showView("workflow");
   const step = {
     id: hitId,
     title: body.row.reason_code,
@@ -176,14 +273,15 @@ async function openHit(hitId) {
       customer_record_id: body.row.customer_record_id,
       alert_id: body.row.alert_id,
       hit_id: hitId,
-      screened: {},
-      hit: { name: "" },
       why: body.why,
       brief: body.brief,
       trail: body.trail,
       jev: body.jev,
       model_note: "Model was not used to build this file.",
       confidence_note: "No confidence number is stored.",
+      workflow: body.workflow,
+      hit: { name: (body.workflow && body.workflow.list_name) || "" },
+      screened: { name: "" },
     },
   };
   state.steps = state.steps.map((item) => item.hit_id === hitId ? step : item);
@@ -219,8 +317,24 @@ async function start() {
   state.index = 1;
   $("summary-line").textContent = journey.summary;
   renderStep();
+  $("tab-workflow").onclick = () => showView("workflow");
   $("tab-simple").onclick = () => showView("simple");
   $("tab-detailed").onclick = () => showView("detailed");
+  const params = new URLSearchParams(window.location.search);
+  const shot = params.get("shot");
+  if (shot) document.body.dataset.shot = shot;
+  const requested = params.get("hit");
+  if (requested) {
+    const existing = state.steps.findIndex((item) => item.hit_id === requested);
+    if (existing >= 0) {
+      state.index = existing;
+      state.view = "workflow";
+      renderStep();
+    } else {
+      await openHit(requested);
+    }
+  }
+  showView(state.view);
   $("back").onclick = () => { state.index = Math.max(0, state.index - 1); renderStep(); };
   $("next").onclick = () => { state.index = Math.min(state.steps.length - 1, state.index + 1); renderStep(); };
   $("play").onclick = () => {

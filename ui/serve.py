@@ -22,6 +22,8 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import workflow
+
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = Path(__file__).resolve().parent / "static"
 ENGINE = ROOT / "system" / "engine.py"
@@ -176,6 +178,7 @@ class Desk:
         digest = hashlib.sha256(output_path.read_bytes()).hexdigest()[:12]
         self.run_id = "recorded-" + digest
         self.repro = {"status": "running", "identical": None, "runs": 0}
+        workflow.prepare(self)
         threading.Thread(target=self._repro, daemon=True).start()
 
     def _decision_key(self, path):
@@ -375,6 +378,7 @@ class Desk:
                 "brief": self.brief(spec["hit_id"]),
                 "trail": self.trail(spec["hit_id"]),
                 "jev": self.jev.get(spec["hit_id"]),
+                "workflow": workflow.build(self, spec["hit_id"], _display_name),
             },
         }
 
@@ -395,6 +399,7 @@ class Desk:
             "totals": totals,
             "practice": self.practice(),
             "repro": self.repro,
+            "funnel": workflow.funnel(self),
             "bar": [
                 {"name": "Cleared", "count": totals.get("DIFFERENT_ENTITY", 0)},
                 {"name": "Kept open", "count": totals.get("SAME_ENTITY", 0)},
@@ -507,7 +512,7 @@ class Desk:
                 "Every decision cites the record fields it used.",
                 "Same input, same answer, every run.",
             ],
-            "how_to_read": "Simple is the analyst view. Detailed shows the ids and the fields behind the same five steps.",
+            "how_to_read": "Workflow is the hit, left to right. Simple is the analyst view. Detailed shows the ids and the fields behind the same steps.",
             "run_id": self.run_id,
             "modes": {
                 "decisions": "REAL",
@@ -560,6 +565,7 @@ class Handler(BaseHTTPRequestHandler):
                 "brief": DESK.brief(hit_id),
                 "trail": DESK.trail(hit_id),
                 "jev": DESK.jev.get(hit_id),
+                "workflow": workflow.build(DESK, hit_id, _display_name),
             })
         if path in ("/", "/index.html"):
             return self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
