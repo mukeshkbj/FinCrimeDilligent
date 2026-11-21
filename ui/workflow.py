@@ -357,8 +357,23 @@ def _list_dob(reason, hit):
     return ""
 
 
-def _name_mark(reason, code, name_agree=None):
-    """Prefer the engine's name_agree flag; fall back to the reason text."""
+def _names_agree_live(customer_name, list_name, is_company=False):
+    """Same name check as the engine when the verify side file is absent."""
+    customer_name = _text(customer_name)
+    list_name = _text(list_name)
+    if not customer_name or not list_name or customer_name == NA or list_name == NA:
+        return None
+    try:
+        engine = _engine()
+    except Exception:
+        return None
+    return bool(
+        engine.any_name_agrees(engine.name_parts(customer_name, is_company), [list_name], is_company)
+    )
+
+
+def _name_mark(reason, code, name_agree=None, customer_name="", list_name="", is_company=False):
+    """Prefer the engine's name_agree flag; fall back to live compare, then reason text."""
     if name_agree is True:
         return "matches"
     if name_agree is False and code == "NAME_MISMATCH_VERIFIED":
@@ -373,6 +388,11 @@ def _name_mark(reason, code, name_agree=None):
     if code in ("NAME_DOB_MATCH", "NAME_DOB_LOCATION_MATCH", "NAME_LOCATION_MATCH"):
         return "matches"
     if name_agree is False:
+        return "clashes"
+    live = _names_agree_live(customer_name, list_name, is_company)
+    if live is True:
+        return "matches"
+    if live is False:
         return "clashes"
     return None
 
@@ -444,7 +464,15 @@ def _compare(desk, reason, code, hit, list_name, group, latest, customer, fallba
     else:
         customer_dob = ""
     list_dob = _list_dob(reason, hit)
-    name_mark = _name_mark(reason, code, flags.get("name_agree"))
+    is_company = (_text((customer or {}).get("entity_type")) or _text(hit.get("entity_type"))).casefold() == "company"
+    name_mark = _name_mark(
+        reason,
+        code,
+        flags.get("name_agree"),
+        customer_name=customer_name,
+        list_name=list_name,
+        is_company=is_company,
+    )
     if name_mark is None:
         name_mark = "missing"
     dob_mark = _dob_mark(reason, code, customer_dob, list_dob, flags.get("dob_agree"))
@@ -643,7 +671,12 @@ def build(desk, hit_id, display_name):
         found_lines.append(_line(how, how_value))
     if holders and len(holders) > 1:
         found_lines.append(_line("Holders", ", ".join(holders)))
-    found_lines.append(_line("Customer", customer_id))
+    found_lines.append(
+        _line(
+            "Customer",
+            "AMBIGUOUS · More than one person fits" if ambiguous else customer_id,
+        )
+    )
     if ambiguous:
         cited = [item for item in evidence if str(item).startswith("CUS-")]
         named = []

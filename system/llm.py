@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Grok writes the reason wording. Python standard library only.
+"""Optional Grok reword of template reasons. Off unless asked. Stdlib only.
 
-Provider order, first key wins:
+Off by default so the scored run never calls a model. Set
+RESOLVE_POLISH_REASONS=1 to turn it on. Provider order, first key wins:
 
 1. OPENROUTER_API_KEY -> https://openrouter.ai/api/v1, pinned id x-ai/grok-4.3
 2. XAI_API_KEY -> https://api.x.ai/v1, pinned id grok-4.3
@@ -18,8 +19,6 @@ most 8 seconds. A run stops calling after 120 calls or 10 minutes. Successful
 responses are cached by the hash of the request, under system/.llm-cache/,
 which is gitignored. Failures are not cached. Keys are read from the
 environment and are never written to disk or logged.
-
-Set RESOLVE_POLISH_REASONS=0 to keep the template wording.
 """
 
 from __future__ import annotations

@@ -73,7 +73,7 @@ python3 ui/serve.py <data_dir> <output_file> [port]
 
 `data_dir` is the official room (`alerts.jsonl`, `hits.jsonl`, `customers.jsonl`, `accounts.jsonl`, `onboarding.jsonl`, `kyc_checks.jsonl`, `notes.jsonl`, `search_results.jsonl`, `name_variants.json`). Holdout needs its own room from `make_unseen.py`, then `system/run` before validate. The committed predictions are `output/dev.jsonl`. Do not commit `dev/` or `holdout/`.
 
-Python 3 standard library only (no `tqdm` — `system/progress.py` draws a stdlib progress bar). `system/run` and `make_unseen.py` log load stages and show a resolve/build bar on stderr. `validate.py` is the organisers' scorer and only prints the final summary. Decisions are deterministic rules only; no model decides. Grok writes the reason wording, checked against the record. A full development run is about 4 seconds and does not use the network.
+Python 3 standard library only (no `tqdm` — `system/progress.py` draws a stdlib progress bar). `system/run` and `make_unseen.py` log load stages and show a resolve/build bar on stderr. `validate.py` is the organisers' scorer and only prints the final summary. No model in the scored run. Grok (grok-4.20 non-reasoning via xAI, or OpenRouter) only drafts the analyst memo in the desk; drafts adding any ID, date or number are rejected. Run: about 4–7 s, $0.
 
 ## Practice score
 
@@ -90,6 +90,7 @@ Python 3 standard library only (no `tqdm` — `system/progress.py` draws a stdli
 | Evidence set against the practice labels | 50 / 50 |
 | Repeat run | byte-identical across five runs |
 | All 819 hits | 457 cleared, 124 sent to compliance, 238 left for review |
+| Holdout | 228 cases, 0 unsafe clearances |
 
 The decision score is the share of cost saved against sending every hit to review. Clearing a true `SAME_ENTITY` or `REVIEW` costs 60, so the engine clears only on an explicit SOP contradiction. A support note that names the hit's country blocks a location clear. A same-year month or day clash on an unverified customer date, a 1 January hit date, or a day/month swap is left for review.
 
@@ -119,6 +120,6 @@ Three worked hits (`H-D861DA` cleared on date of birth, `H-582410` confirmed, `H
 
 ## Models
 
-Decisions come from the rules only. A model never decides, and no key can change a decision or a reason code.
+No model in the scored run. Decisions, reason codes and reasons come from the rules only; no key can change them. Run: about 4–7 s, $0.
 
-Grok writes each reason's wording when a key is set. `OPENROUTER_API_KEY` is used first (`x-ai/grok-4.3`), then `XAI_API_KEY` (`grok-4.3`). Copy `.env.example` to `.env` and fill in the keys; `system/run` loads it without printing values. A Grok reply is kept only when it has 2 to 4 sentences, keeps every record id the template cites, and adds no id, date or number the template lacks. Otherwise the template reason is used. Calls are temperature 0, seed 1, cached by request hash under `system/.llm-cache/`, and capped at 120 calls or 10 minutes. Set `RESOLVE_POLISH_REASONS=0` to keep the template wording.
+Grok (grok-4.20 non-reasoning via xAI, or OpenRouter) only drafts the analyst memo in the desk; drafts adding any ID, date or number are rejected. Copy `.env.example` to `.env` for desk keys; `system/run` and `ui/serve.py` load it without printing values. Optional scored-run rewording stays off unless `RESOLVE_POLISH_REASONS=1`.

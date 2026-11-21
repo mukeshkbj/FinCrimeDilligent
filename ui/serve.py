@@ -93,25 +93,40 @@ STORY = [
     },
 ]
 
+# English beside every code from POLICY.md / the screening brief.
 PLAIN = {
-    "DIFFERENT_ENTITY": "Cleared",
-    "SAME_ENTITY": "Sent to compliance",
-    "REVIEW": "Left for you",
+    "DIFFERENT_ENTITY": "Different person or company (cleared)",
+    "SAME_ENTITY": "Same person (sent to compliance)",
+    "REVIEW": "Needs a person",
 }
 
 PLAIN_CODE = {
-    "TEMPORAL_IMPOSSIBILITY": "Too young at the report",
-    "DOB_MISMATCH": "Dates do not match",
-    "LOCATION_MISMATCH": "Countries do not match",
-    "NAME_MISMATCH_VERIFIED": "Verified name does not match",
-    "ENTITY_TYPE_MISMATCH": "Person and company clash",
-    "DECEASED": "Listed person had died",
-    "NAME_DOB_LOCATION_MATCH": "Name, date and country agree",
-    "NAME_DOB_MATCH": "Name and date agree",
-    "NAME_LOCATION_MATCH": "Name and country agree",
-    "INSUFFICIENT_DATA": "Not enough to settle",
-    "AMBIGUOUS_CUSTOMER_RECORD": "More than one person fits",
+    "TEMPORAL_IMPOSSIBILITY": "Too young, or not yet incorporated, at the earliest dated report",
+    "DOB_MISMATCH": "Date of birth contradicts every date the hit gives",
+    "LOCATION_MISMATCH": "No shared country with the hit",
+    "NAME_MISMATCH_VERIFIED": "Verified legal name matches none of the hit's names",
+    "ENTITY_TYPE_MISMATCH": "One is a person and the other a company",
+    "DECEASED": "Listed person died before the customer was screened",
+    "NAME_DOB_LOCATION_MATCH": "Name, date of birth and country agree",
+    "NAME_DOB_MATCH": "Name and date of birth agree",
+    "NAME_LOCATION_MATCH": "Name and country agree (companies)",
+    "INSUFFICIENT_DATA": "Nothing settles it",
+    "AMBIGUOUS_CUSTOMER_RECORD": "More than one person fits the alert",
 }
+
+PLAIN_CUSTOMER = {
+    "AMBIGUOUS": "More than one person fits",
+}
+
+
+def code_label(code, plain_map):
+    """CODE · English, or just CODE when no plain form is known."""
+    if not code:
+        return ""
+    plain = plain_map.get(code)
+    if not plain or plain == code:
+        return code
+    return f"{code} · {plain}"
 
 COST = {
     "DIFFERENT_ENTITY": {"DIFFERENT_ENTITY": 0, "SAME_ENTITY": 3, "REVIEW": 3},
@@ -192,7 +207,9 @@ class Desk:
         digest = hashlib.sha256(output_path.read_bytes()).hexdigest()[:12]
         self.run_id = "recorded-" + digest
         self.repro = self._load_repro()
-        self.openrouter_key = bool(os.environ.get("OPENROUTER_API_KEY"))
+        self.draft_key = bool(
+            os.environ.get("OPENROUTER_API_KEY") or os.environ.get("XAI_API_KEY")
+        )
         workflow.prepare(self)
 
     def _load_repro(self):
@@ -432,7 +449,9 @@ class Desk:
                 "hit_name": _display_name(hit),
                 "happened": row.get("reason"),
                 "outcome": PLAIN.get(decision, decision),
+                "decision_label": code_label(decision, PLAIN),
                 "plain_code": PLAIN_CODE.get(code, code),
+                "reason_code_label": code_label(code, PLAIN_CODE),
                 "checked": spec["checked_ok"] if passed else spec["checked_bad"],
                 "passed": passed,
             },
@@ -472,7 +491,7 @@ class Desk:
                 "jev": self.jev.get(spec["hit_id"]),
                 "workflow": workflow.build(self, spec["hit_id"], _display_name),
                 "memo": workflow.analyst_memo(self, spec["hit_id"]),
-                "draft_available": self.openrouter_key,
+                "draft_available": self.draft_key,
             },
         }
 
@@ -495,10 +514,15 @@ class Desk:
             "repro": self.repro,
             "funnel": workflow.funnel(self),
             "bar": [
-                {"name": "Cleared", "count": totals.get("DIFFERENT_ENTITY", 0)},
-                {"name": "Sent to compliance", "count": totals.get("SAME_ENTITY", 0)},
-                {"name": "Left for you", "count": totals.get("REVIEW", 0)},
+                {"name": code_label("DIFFERENT_ENTITY", PLAIN), "count": totals.get("DIFFERENT_ENTITY", 0)},
+                {"name": code_label("SAME_ENTITY", PLAIN), "count": totals.get("SAME_ENTITY", 0)},
+                {"name": code_label("REVIEW", PLAIN), "count": totals.get("REVIEW", 0)},
             ],
+            "labels": {
+                "decisions": PLAIN,
+                "reason_codes": PLAIN_CODE,
+                "customer": PLAIN_CUSTOMER,
+            },
         }
 
     def raw_record(self, evidence_id):
@@ -600,14 +624,24 @@ class Desk:
                 if row["decision"] != "REVIEW" or not (log.get("name_agree") and log.get("dob_agree")):
                     continue
             hit = self.hits.get(hit_id, {})
+            decision = row["decision"]
+            code = row["reason_code"]
+            customer = row.get("customer_record_id")
             rows.append({
                 "hit_id": hit_id,
                 "alert_id": row.get("alert_id"),
                 "name": hit.get("name"),
-                "decision": row["decision"],
-                "reason_code": row["reason_code"],
-                "customer_record_id": row.get("customer_record_id"),
-                "jev": "downgraded" if log.get("downgraded") else ("pass" if log else "not logged"),
+                "decision": decision,
+                "decision_label": code_label(decision, PLAIN),
+                "reason_code": code,
+                "reason_code_label": code_label(code, PLAIN_CODE),
+                "customer_record_id": customer,
+                "customer_label": (
+                    code_label(customer, PLAIN_CUSTOMER) if customer == "AMBIGUOUS" else customer
+                ),
+                "jev": (
+                    "downgraded" if log.get("downgraded") else ("pass" if log else "")
+                ),
             })
         rows.sort(key=lambda item: item["hit_id"])
         return {"filter": kind, "count": len(rows), "hits": rows[:80]}
@@ -638,7 +672,7 @@ class Desk:
                 "Every decision cites the record fields it used.",
                 "Same input, same answer, every run.",
             ],
-            "how_to_read": "Workflow is the hit, left to right. Simple is the analyst view. Detailed shows the ids and the fields behind the same steps.",
+            "how_to_read": "Workflow is the hit, left to right. Simple is the analyst view. Detailed shows the ids and the fields behind the same steps. Codes from the brief sit beside their English meaning.",
             "run_id": self.run_id,
             "modes": {
                 "decisions": "REAL",
@@ -646,6 +680,11 @@ class Desk:
                 "model": "not used",
             },
             "practice_banner": "Practice file. These people are invented. Nothing is sent to a customer.",
+            "labels": {
+                "decisions": PLAIN,
+                "reason_codes": PLAIN_CODE,
+                "customer": PLAIN_CUSTOMER,
+            },
         }
 
 
@@ -694,7 +733,7 @@ class Handler(BaseHTTPRequestHandler):
                 "jev": DESK.jev.get(hit_id),
                 "workflow": flow,
                 "memo": flow.get("memo"),
-                "draft_available": DESK.openrouter_key,
+                "draft_available": DESK.draft_key,
             })
         if path.startswith("/api/record/"):
             evidence_id = urllib.parse.unquote(path.split("/")[-1])
