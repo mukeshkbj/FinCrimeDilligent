@@ -33,11 +33,136 @@ function withChips(value) {
   return html;
 }
 
-function chipId(id) {
-  return `<button type="button" class="chip" data-record="${esc(id)}">${esc(id)}</button>`;
+function chipId(id, { deciding = false } = {}) {
+  const kind = deciding ? " chip--evidence" : "";
+  const title = deciding ? ' title="Record that decided this hit"' : "";
+  return `<button type="button" class="chip${kind}" data-record="${esc(id)}"${title}>${esc(id)}</button>`;
 }
 
 function $(id) { return document.getElementById(id); }
+
+function prefersReducedMotion() {
+  return matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+function clamp(n, lo, hi) {
+  return Math.min(hi, Math.max(lo, n));
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function shouldPlayIntro() {
+  if (prefersReducedMotion()) return false;
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("shot") || params.get("nointro") === "1") return false;
+  try {
+    if (sessionStorage.getItem("namesake-intro") === "1") return false;
+  } catch (error) { /* private mode */ }
+  return true;
+}
+
+function seedIntroSpecks() {
+  const host = $("intro-specks");
+  if (!host) return;
+  const kinds = ["", "kept", "review", "kept", ""];
+  host.innerHTML = Array.from({ length: 18 }, (_, index) => {
+    const col = (index * 3 + 1) % 14;
+    const row = (index * 5 + 2) % 12;
+    const kind = kinds[index % kinds.length];
+    const size = 6 + (index % 3) * 4;
+    return `<i class="${kind}" style="left:${8 + col * 6.2}%;top:${10 + row * 6.5}%;width:${size}px;height:${size}px"></i>`;
+  }).join("");
+}
+
+function runIntro() {
+  const root = document.documentElement;
+  const intro = $("intro");
+  const num = $("intro-num");
+  if (!intro || !num) {
+    root.classList.add("is-loaded");
+    return Promise.resolve();
+  }
+  root.classList.add("has-intro");
+  intro.hidden = false;
+  intro.setAttribute("aria-hidden", "false");
+  seedIntroSpecks();
+  if ("scrollRestoration" in history) history.scrollRestoration = "manual";
+  window.scrollTo(0, 0);
+
+  return new Promise((resolve) => {
+    const duration = 1600;
+    const t0 = performance.now();
+    const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+    let finished = false;
+
+    function finish() {
+      if (finished) return;
+      finished = true;
+      num.textContent = "100";
+      root.classList.add("intro-out");
+      setTimeout(() => {
+        root.classList.add("is-loaded");
+        root.classList.add("intro-done");
+        intro.hidden = true;
+        intro.setAttribute("aria-hidden", "true");
+        try { sessionStorage.setItem("namesake-intro", "1"); } catch (error) { /* private mode */ }
+        resolve();
+      }, 780);
+    }
+
+    function step(now) {
+      const t = clamp((now - t0) / duration, 0, 1);
+      num.textContent = String(Math.round(ease(t) * 100)).padStart(2, "0");
+      if (t < 1) requestAnimationFrame(step);
+      else finish();
+    }
+    requestAnimationFrame(step);
+    setTimeout(finish, 4200);
+  });
+}
+
+function revealPipeline(pipeline) {
+  if (!pipeline || prefersReducedMotion()) return;
+  pipeline.classList.remove("is-revealing");
+  const parts = pipeline.querySelectorAll(".stage, .stage-arrow");
+  parts.forEach((el, index) => {
+    el.style.setProperty("--d", String(index * 70));
+  });
+  // restart animation
+  void pipeline.offsetWidth;
+  pipeline.classList.add("is-revealing");
+}
+
+function bindStageSpotlight(pipeline) {
+  if (!pipeline || prefersReducedMotion()) return;
+  pipeline.querySelectorAll(".stage").forEach((stage) => {
+    stage.onpointermove = (event) => {
+      const box = stage.getBoundingClientRect();
+      const x = ((event.clientX - box.left) / box.width) * 100;
+      const y = ((event.clientY - box.top) / box.height) * 100;
+      stage.style.setProperty("--sx", `${clamp(x, 0, 100)}%`);
+      stage.style.setProperty("--sy", `${clamp(y, 0, 100)}%`);
+    };
+  });
+}
+
+function bindMagnetic(selectors) {
+  if (prefersReducedMotion() || !matchMedia("(hover: hover) and (pointer: fine)").matches) return;
+  document.querySelectorAll(selectors).forEach((el) => {
+    el.setAttribute("data-magnetic", "");
+    el.onpointermove = (event) => {
+      const box = el.getBoundingClientRect();
+      const dx = (event.clientX - (box.left + box.width / 2)) / box.width;
+      const dy = (event.clientY - (box.top + box.height / 2)) / box.height;
+      el.style.transform = `translate(${dx * 6}px, ${dy * 4}px)`;
+    };
+    el.onpointerleave = () => {
+      el.style.transform = "";
+    };
+  });
+}
 
 function outcomeClass(text) {
   const value = String(text || "");
@@ -368,12 +493,19 @@ function syncPlaybackUi() {
     button.setAttribute("aria-pressed", button.dataset.mode === state.mode ? "true" : "false");
   });
   const count = $("step-count");
-  if (!count) return;
-  const step = state.steps[state.index];
-  const raw = step ? ((step.detailed && step.detailed.reason_code) || step.title) : "";
-  const title = reasonCodeLabel(raw) || raw;
-  const modeLabel = state.playing ? "Auto" : "Step";
-  count.textContent = `${modeLabel} · Step ${state.index + 1} of ${state.steps.length}${title ? ` · ${title}` : ""}`;
+  if (count) {
+    const step = state.steps[state.index];
+    const raw = step ? ((step.detailed && step.detailed.reason_code) || step.title) : "";
+    const title = reasonCodeLabel(raw) || raw;
+    const modeLabel = state.playing ? "Auto" : "Step";
+    count.textContent = `${modeLabel} · Step ${state.index + 1} of ${state.steps.length}${title ? ` · ${title}` : ""}`;
+  }
+  const bar = $("story-progress-bar");
+  if (bar) {
+    const total = state.steps.length || 1;
+    const pct = ((state.index + 1) / total) * 100;
+    bar.style.width = `${pct}%`;
+  }
 }
 
 function renderTimeline() {
@@ -431,16 +563,18 @@ function renderWorkflow(flow) {
           ${row.note ? `<div class="side-note">${withChips(row.note)}</div>` : ""}
         </div>`).join("");
     } else if (stage.key === "decision") {
-      const ids = (stage.evidence || []).length ? stage.evidence.map(chipId).join(" ") : "not available";
+      const ids = (stage.evidence || []).length
+        ? stage.evidence.map((id) => chipId(id, { deciding: true })).join(" ")
+        : "not available";
       const code = stage.reason_code || flow.reason_code || "";
       const decided = stage.decision || decision;
       body = `
-        <p class="dec-word">${decisionBadge(decided)}</p>
+        <p class="dec-word dec-${esc(decided)}">${decisionBadge(decided)}</p>
         <dl>
           <dt>Decision</dt><dd>${decisionBadge(decided)}</dd>
           <dt>Reason code</dt><dd>${reasonBadge(code)}</dd>
           <dt>Why</dt><dd class="reason">${withChips(stage.reason)}</dd>
-          <dt>Evidence</dt><dd>${ids}</dd>
+          <dt>Deciding records</dt><dd class="evidence-list">${ids}</dd>
         </dl>`;
     } else {
       body = `<dl>${linesHtml(stage.lines)}</dl>`;
@@ -451,7 +585,8 @@ function renderWorkflow(flow) {
       </svg>
     </div>`;
     const tint = stage.key ? ` stage-${esc(stage.key)}` : "";
-    return `${arrow}<article class="stage${tint}"><h3><span class="n">${stage.n}</span> ${esc(stage.title)}</h3>${body}</article>`;
+    const climax = stage.key === "decision" ? ` stage-climax outcome-${outcomeClass(decision)}` : "";
+    return `${arrow}<article class="stage${tint}${climax}"><h3><span class="n">${esc(String(stage.n).padStart(2, "0"))}</span> ${esc(stage.title)}</h3>${body}</article>`;
   }).join("");
   panel.innerHTML = `
     <div class="wf-head">
@@ -460,6 +595,10 @@ function renderWorkflow(flow) {
     </div>
     <div class="pipeline">${stages}</div>`;
   bindChips(panel);
+  const pipeline = panel.querySelector(".pipeline");
+  revealPipeline(pipeline);
+  bindStageSpotlight(pipeline);
+  bindMagnetic(".stage-arrow");
 }
 
 function renderStep() {
@@ -659,6 +798,10 @@ async function openHit(hitId) {
 }
 
 async function start() {
+  const introPromise = shouldPlayIntro()
+    ? runIntro()
+    : (document.documentElement.classList.add("is-loaded"), Promise.resolve());
+
   let saved = "light";
   try { saved = localStorage.getItem("desk-theme") || "light"; } catch (error) { saved = "light"; }
   applyTheme(saved);
@@ -744,6 +887,16 @@ async function start() {
   if (close) close.onclick = () => { $("record-panel").hidden = true; };
   $("ticker").textContent = "Showing the recorded decisions. Nothing on this page changes the scored file.";
   loadQueue("review");
+  bindMagnetic(".btn-autoplay, .btn-replay");
+  await introPromise;
+  if (!document.documentElement.classList.contains("is-loaded")) {
+    document.documentElement.classList.add("is-loaded");
+  }
+  const pipeline = document.querySelector("#panel-workflow .pipeline");
+  if (pipeline) {
+    revealPipeline(pipeline);
+    bindStageSpotlight(pipeline);
+  }
 }
 
 start().catch((error) => { $("ticker").textContent = error.message; });
