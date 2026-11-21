@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Score the full engine against two weaker name matchers on the same data folder.
 
-Writes ui/static/matchers.json for the desk panel. Stdlib only.
+Writes ui/static/matchers.json for the Namesake panel. Stdlib only.
 """
 
 from __future__ import annotations

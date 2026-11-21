@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Demo desk for a recorded screening run.
+"""Namesake demo UI for a recorded screening run.
 
 The browser only displays. Decisions are read from an output JSONL file
 produced by system/run. This process never decides a hit.
@@ -8,7 +8,7 @@ Usage:
     python3 ui/serve.py <data_dir> <output_file> [port]
 
 Prints one line you can open, for example:
-    screening desk on http://127.0.0.1:8765/
+    Namesake on http://127.0.0.1:8765/
 It does not open a browser. If that port is already taken on localhost, it exits
 with an error instead of binding a different interface that would confuse you.
 """
@@ -664,8 +664,8 @@ class Desk:
 
     def config(self):
         return {
-            "app_name": "Screening desk",
-            "outcome": "Clears false sanctions hits safely, and sends every doubtful one to a person, with a precise reason.",
+            "app_name": "Namesake",
+            "outcome": "Clears the strangers. Keeps the suspects. Shows the record.",
             "how": "It reads the customer file, the passport check and the list profile, then applies your rules.",
             "promises": [
                 "A bad decision is worse than no decision, so anything uncertain goes to review.",
@@ -819,7 +819,7 @@ def main():
         server = ThreadingHTTPServer((host, port), Handler)
     except OSError as error:
         sys.stderr.write(
-            f"error: could not start the screening desk on http://{host}:{port}\n"
+            f"error: could not start Namesake on http://{host}:{port}\n"
             f"  {error}\n"
             f"  Try another port, for example:\n"
             f"  python3 ui/serve.py {sys.argv[1]} {sys.argv[2]} {port + 1}\n"
@@ -827,7 +827,7 @@ def main():
         sys.exit(1)
     url = f"http://{host}:{port}/"
     sys.stderr.write(
-        f"screening desk on {url}\n"
+        f"Namesake on {url}\n"
         f"open that URL in your browser (this process does not open a window)\n"
         f"data={data_dir.name}  output={output_path.name}  hits={len(DESK.output)}\n"
     )

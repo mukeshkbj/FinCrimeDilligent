@@ -1,6 +1,18 @@
-# Same person or not?
+# Namesake
 
-Sanctions-screening identity resolver for Diligent Track 2. For every watchlist hit, decide whether it is the customer.
+> Clears the strangers. Keeps the suspects. Shows the record.
+
+A bank's screening system flags hundreds of possible matches between its customers and people on watchlists. Most of these hits share only a name and are false alarms.
+
+What the system does for every watchlist hit:
+
+- Works out who the customer really is by pulling together the bank's messy internal records.
+- Works out who the listed person really is, telling them apart from other people with the same name.
+- Decides whether they're the same person:
+  - If they're clearly different people, it clears the hit automatically.
+  - If it's a genuine or uncertain match, it keeps the hit for a human analyst to review.
+
+Why it matters: Analysts spend less time on false positives, and real or borderline matches always reach a human instead of being cleared automatically.
 
 Read [PRINCIPLES.md](PRINCIPLES.md) before changing the rules. Agents should also read [AGENTS.md](AGENTS.md). How the files behave is in [DATA_NOTES.md](DATA_NOTES.md). The engine write-up, diagram, and three cases are in [system/README.md](system/README.md).
 
@@ -43,11 +55,11 @@ python3 validate.py --data holdout --output holdout/predictions.jsonl --score ho
 
 ```bash
 python3 ui/serve.py dev output/dev.jsonl
-# prints: screening desk on http://127.0.0.1:8765/
+# prints: Namesake on http://127.0.0.1:8765/
 # open that URL yourself (optional port: … 8766)
 ```
 
-Displays that file and does not score or rewrite it. The process prints `screening desk on http://127.0.0.1:8765/` and waits; it does not open a browser window. If the port is busy it exits with an error and suggests another port — it will not silently share a port with another app. The page opens on the workflow: alert, customer found, identity, comparison, and the decision. A funnel above it counts hits, customers found, cleared, sent to compliance, and sent to review from the output file. The compare stage shows the list name with the original script beside it when the file has one. Cited record ids in the reason are shown as source chips. Simple and Detailed stay on the same page.
+Displays that file and does not score or rewrite it. The process prints `Namesake on http://127.0.0.1:8765/` and waits; it does not open a browser window. If the port is busy it exits with an error and suggests another port — it will not silently share a port with another app. The page opens on the workflow: alert, customer found, identity, comparison, and the decision. A funnel above it counts hits, customers found, cleared, sent to compliance, and sent to review from the output file. The compare stage shows the list name with the original script beside it when the file has one. Cited record ids in the reason are shown as source chips. Simple and Detailed stay on the same page.
 
 ### Try these hits
 
@@ -73,7 +85,7 @@ python3 ui/serve.py <data_dir> <output_file> [port]
 
 `data_dir` is the official room (`alerts.jsonl`, `hits.jsonl`, `customers.jsonl`, `accounts.jsonl`, `onboarding.jsonl`, `kyc_checks.jsonl`, `notes.jsonl`, `search_results.jsonl`, `name_variants.json`). Holdout needs its own room from `make_unseen.py`, then `system/run` before validate. The committed predictions are `output/dev.jsonl`. Do not commit `dev/` or `holdout/`.
 
-Python 3 standard library only (no `tqdm` — `system/progress.py` draws a stdlib progress bar). `system/run` and `make_unseen.py` log load stages and show a resolve/build bar on stderr. `validate.py` is the organisers' scorer and only prints the final summary. No model in the scored run. Grok (grok-4.20 non-reasoning via xAI, or OpenRouter) only drafts the analyst memo in the desk; drafts adding any ID, date or number are rejected. Run: about 4–7 s, $0.
+Python 3 standard library only (no `tqdm` — `system/progress.py` draws a stdlib progress bar). `system/run` and `make_unseen.py` log load stages and show a resolve/build bar on stderr. `validate.py` is the organisers' scorer and only prints the final summary. No model in the scored run. Grok (grok-4.20 non-reasoning via xAI, or OpenRouter) only drafts the analyst memo in Namesake; drafts adding any ID, date or number are rejected. Run: about 4–7 s, $0.
 
 ## Practice score
 
@@ -122,4 +134,4 @@ Three worked hits (`H-D861DA` cleared on date of birth, `H-582410` confirmed, `H
 
 No model in the scored run. Decisions, reason codes and reasons come from the rules only; no key can change them. Run: about 4–7 s, $0.
 
-Grok (grok-4.20 non-reasoning via xAI, or OpenRouter) only drafts the analyst memo in the desk; drafts adding any ID, date or number are rejected. Copy `.env.example` to `.env` for desk keys; `system/run` and `ui/serve.py` load it without printing values. Optional scored-run rewording stays off unless `RESOLVE_POLISH_REASONS=1`.
+Grok (grok-4.20 non-reasoning via xAI, or OpenRouter) only drafts the analyst memo in Namesake; drafts adding any ID, date or number are rejected. Copy `.env.example` to `.env` for Namesake keys; `system/run` and `ui/serve.py` load it without printing values. Optional scored-run rewording stays off unless `RESOLVE_POLISH_REASONS=1`.
