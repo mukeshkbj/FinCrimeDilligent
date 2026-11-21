@@ -2,6 +2,7 @@
 # directory at runtime and does not need these files in git.
 dev/
 dev
+holdout/
 *.xlsx
 .env
 .env.*
@@ -17,6 +18,6 @@ docs/internal/
 data/internal/
 .omc/
 system/.llm-cache/
-output/*
-!output/.keep
+output/.llm-cache/
 .claude/
+.cursor/

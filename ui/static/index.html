@@ -8,108 +8,118 @@
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-  <header class="top">
-    <div class="top-row">
-      <div>
-        <p class="kicker" id="app-name">Screening desk</p>
-        <h1 id="outcome"></h1>
-        <p class="how" id="how"></p>
-      </div>
-      <div class="top-tools">
-        <span class="badge" id="mode-badge">Practice file</span>
-        <div class="theme" role="group" aria-label="Theme">
-          <button type="button" data-theme="light">Light</button>
-          <button type="button" data-theme="system">System</button>
-          <button type="button" data-theme="dark">Dark</button>
-        </div>
+  <header class="shell">
+    <div class="shell-brand">
+      <h1 id="app-name">Screening desk</h1>
+      <p class="shell-tagline" id="outcome"></p>
+    </div>
+    <div class="shell-tools">
+      <span class="badge" id="mode-badge">Practice file</span>
+      <div class="theme" role="group" aria-label="Theme">
+        <button type="button" data-theme="light">Light</button>
+        <button type="button" data-theme="system">System</button>
+        <button type="button" data-theme="dark">Dark</button>
       </div>
     </div>
-    <ul class="promises" id="promises"></ul>
-    <p class="read" id="how-to-read"></p>
-    <details class="glossary">
-      <summary>Words on this screen</summary>
-      <ul>
-        <li><strong>Sanctions.</strong> Government lists of people, companies and countries it is illegal to deal with.</li>
-        <li><strong>PEP.</strong> Politically exposed person, a public official or family member, higher corruption risk.</li>
-        <li><strong>Screening hit.</strong> A name on a list that looks like one of our customers.</li>
-        <li><strong>SAME_ENTITY.</strong> The evidence shows this list profile is the customer.</li>
-        <li><strong>DIFFERENT_ENTITY.</strong> The evidence shows this list profile is not the customer, so the hit is cleared.</li>
-        <li><strong>REVIEW.</strong> Sent to a person because we're not sure.</li>
-        <li><strong>SAR.</strong> Suspicious Activity Report filed with the UK National Crime Agency; a confirmed match may lead to one.</li>
-      </ul>
-    </details>
+    <p class="status-line" id="ticker" aria-live="polite">Loading the recorded file…</p>
   </header>
 
-  <p class="banner" id="banner"></p>
-  <p class="ticker" id="ticker" aria-live="polite">Loading the recorded file…</p>
+  <main class="desk">
+    <section class="story-bar" aria-label="Demo playback">
+      <div class="playback">
+        <button type="button" id="play" class="btn-autoplay" aria-pressed="false">Autoplay full story</button>
+        <div class="speed" role="group" aria-label="Playback speed">
+          <button type="button" data-speed="0.5">0.5x</button>
+          <button type="button" data-speed="1" aria-pressed="true">1x</button>
+          <button type="button" data-speed="2">2x</button>
+        </div>
+        <div class="mode-group" role="group" aria-label="Playback mode">
+          <button type="button" id="mode-auto" data-mode="auto">Auto</button>
+          <button type="button" id="mode-step" data-mode="step" aria-pressed="true">Step</button>
+          <button type="button" id="reset">Reset</button>
+        </div>
+        <button type="button" id="back" class="ghost">Back</button>
+        <button type="button" id="next" class="ghost">Forward</button>
+        <button type="button" id="replay" class="btn-replay">Replay</button>
+        <span class="playback-status" id="step-count"></span>
+      </div>
+      <div class="timeline" id="timeline" role="tablist" aria-label="Story timeline"></div>
+      <div class="rail" id="rail" hidden aria-hidden="true"></div>
+    </section>
 
-  <section class="funnel" id="funnel" aria-label="Hit funnel">
-    <p class="bar-label">From the output file</p>
-    <div class="funnel-row" id="funnel-row"></div>
+    <div class="view-chrome">
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" id="tab-workflow" aria-controls="panel-workflow" aria-selected="true">Workflow</button>
+        <button type="button" role="tab" id="tab-simple" aria-controls="panel-simple" aria-selected="false">Simple</button>
+        <button type="button" role="tab" id="tab-detailed" aria-controls="panel-detailed" aria-selected="false">Detailed</button>
+      </div>
+    </div>
+
+    <div class="workspace">
+      <div class="main">
+        <div id="panel-workflow" role="tabpanel" aria-labelledby="tab-workflow"></div>
+        <div id="panel-simple" role="tabpanel" aria-labelledby="tab-simple" hidden></div>
+        <div id="panel-detailed" role="tabpanel" aria-labelledby="tab-detailed" hidden></div>
+        <aside class="story-aside">
+          <h2>This story</h2>
+          <p id="summary-line"></p>
+          <ol id="check-list"></ol>
+          <p class="real-line" id="real-line"></p>
+        </aside>
+      </div>
+    </div>
+  </main>
+
+  <section class="run-overview" aria-label="Run overview">
+    <div class="run-metrics">
+      <div class="funnel" id="funnel">
+        <p class="section-label">From the output file</p>
+        <div class="funnel-row" id="funnel-row"></div>
+      </div>
+      <div class="bar-wrap">
+        <p class="section-label">Where the hits went</p>
+        <div class="bar" id="bar" role="img" aria-label="Decision totals"></div>
+      </div>
+    </div>
+    <section class="kpis" id="kpis" aria-label="Run totals"></section>
   </section>
 
-  <section class="matchers" id="matchers" aria-label="Why not just fuzzy match?">
-    <h2 class="bar-label">Why not just fuzzy match?</h2>
-    <div id="matchers-table"></div>
-    <p class="matchers-note" id="matchers-note"></p>
-  </section>
-
-  <section class="kpis" id="kpis" aria-label="Run totals"></section>
-
-  <div class="bar-wrap">
-    <p class="bar-label">Where the 819 hits went</p>
-    <div class="bar" id="bar" role="img" aria-label="Decision totals"></div>
-  </div>
-
-  <div class="story-bar" aria-label="Demo playback">
-    <div class="playback">
-      <button type="button" id="play" class="btn-autoplay" aria-pressed="false">Autoplay full story</button>
-      <div class="speed" role="group" aria-label="Playback speed">
-        <button type="button" data-speed="0.5">0.5x</button>
-        <button type="button" data-speed="1" aria-pressed="true">1x</button>
-        <button type="button" data-speed="2">2x</button>
-      </div>
-      <div class="mode-group" role="group" aria-label="Playback mode">
-        <button type="button" id="mode-auto" data-mode="auto">Auto</button>
-        <button type="button" id="mode-step" data-mode="step" aria-pressed="true">Step</button>
-        <button type="button" id="reset">Reset</button>
-      </div>
-      <button type="button" id="back" class="ghost">Step back</button>
-      <button type="button" id="next" class="ghost">Step forward</button>
-      <button type="button" id="replay" class="btn-replay">Replay</button>
-      <span class="playback-status" id="step-count"></span>
+  <details class="about-run">
+    <summary>About this run</summary>
+    <div class="about-body">
+      <p class="how" id="how"></p>
+      <p class="read" id="how-to-read"></p>
+      <p class="banner" id="banner"></p>
+      <ul class="promises" id="promises"></ul>
+      <details class="glossary">
+        <summary>Words on this screen</summary>
+        <ul>
+          <li><strong>Sanctions.</strong> Government lists of people, companies and countries it is illegal to deal with.</li>
+          <li><strong>PEP.</strong> Politically exposed person, a public official or family member, higher corruption risk.</li>
+          <li><strong>Screening hit.</strong> A name on a list that looks like one of our customers.</li>
+          <li><strong>SAME_ENTITY.</strong> The evidence shows this list profile is the customer.</li>
+          <li><strong>DIFFERENT_ENTITY.</strong> The evidence shows this list profile is not the customer, so the hit is cleared.</li>
+          <li><strong>REVIEW.</strong> Sent to a person because we're not sure.</li>
+          <li><strong>SAR.</strong> Suspicious Activity Report filed with the UK National Crime Agency; a confirmed match may lead to one.</li>
+        </ul>
+      </details>
+      <section class="matchers" id="matchers" aria-label="Why not just fuzzy match?">
+        <h2 class="section-label">Why not just fuzzy match?</h2>
+        <div id="matchers-table"></div>
+        <p class="matchers-note" id="matchers-note"></p>
+      </section>
     </div>
-    <div class="timeline" id="timeline" role="tablist" aria-label="Story timeline"></div>
-    <div class="rail" id="rail" hidden aria-hidden="true"></div>
-  </div>
-
-  <div class="tabs" role="tablist">
-    <button type="button" role="tab" id="tab-workflow" aria-controls="panel-workflow" aria-selected="true">Workflow</button>
-    <button type="button" role="tab" id="tab-simple" aria-controls="panel-simple" aria-selected="false">Simple</button>
-    <button type="button" role="tab" id="tab-detailed" aria-controls="panel-detailed" aria-selected="false">Detailed</button>
-  </div>
-
-  <div class="layout">
-    <div class="main">
-      <div id="panel-workflow" role="tabpanel" aria-labelledby="tab-workflow"></div>
-      <div id="panel-simple" role="tabpanel" aria-labelledby="tab-simple" hidden></div>
-      <div id="panel-detailed" role="tabpanel" aria-labelledby="tab-detailed" hidden></div>
-    </div>
-    <aside>
-      <h2>This story</h2>
-      <p id="summary-line"></p>
-      <ol id="check-list"></ol>
-      <p class="real-line" id="real-line"></p>
-    </aside>
-  </div>
+  </details>
 
   <section class="queue-wrap">
-    <h2>Queue</h2>
-    <div class="rail-actions" id="filters">
-      <button type="button" data-filter="review" class="primary">Left for you</button>
-      <button type="button" data-filter="review_name_dob">Left for you, name and date agree</button>
-      <button type="button" data-filter="cleared">Cleared</button>
-      <button type="button" data-filter="kept">Sent to compliance</button>
+    <div class="queue-head">
+      <h2>Queue</h2>
+      <div class="filters" id="filters">
+        <button type="button" data-filter="review" class="primary">Left for you</button>
+        <button type="button" data-filter="review_name_dob">Name and date agree</button>
+        <button type="button" data-filter="cleared">Cleared</button>
+        <button type="button" data-filter="kept">Sent to compliance</button>
+      </div>
     </div>
     <div class="queue" id="queue"></div>
   </section>

@@ -16,6 +16,7 @@ import time
 import unicodedata
 
 import normalize
+import progress as progress_ui
 from collections import defaultdict
 from functools import lru_cache
 from pathlib import Path
@@ -1101,22 +1102,31 @@ def company_flag(entity_type):
 class Store:
     def __init__(self, data_dir):
         global VARIANT_INDEX, LEGAL_FORMS
+        progress_ui.log(f"loading data room {data_dir}")
         VARIANT_INDEX, LEGAL_FORMS = load_variants(f"{data_dir}/name_variants.json")
         self.alerts = {}
         for row in read_jsonl(f"{data_dir}/alerts.jsonl"):
             if row.get("alert_id"):
                 self.alerts[row["alert_id"]] = row
+        progress_ui.log(f"  alerts={len(self.alerts)}")
         self.hits = [row for row in read_jsonl(f"{data_dir}/hits.jsonl") if row.get("hit_id")]
         self.hit_ids = {row["hit_id"] for row in self.hits}
+        progress_ui.log(f"  hits={len(self.hits)}")
         self.customers = {}
         for row in read_jsonl(f"{data_dir}/customers.jsonl"):
             if row.get("record_id"):
                 self.customers[row["record_id"]] = row
+        progress_ui.log(f"  customers={len(self.customers)}")
         accounts = [row for row in read_jsonl(f"{data_dir}/accounts.jsonl") if row.get("account_id") and row.get("customer_id")]
+        progress_ui.log(f"  accounts={len(accounts)}")
         onboarding = [row for row in read_jsonl(f"{data_dir}/onboarding.jsonl") if row.get("account_id") and row.get("customer_id")]
+        progress_ui.log(f"  onboarding={len(onboarding)}")
         checks = [row for row in read_jsonl(f"{data_dir}/kyc_checks.jsonl") if row.get("check_id") and row.get("applicant_id")]
+        progress_ui.log(f"  kyc_checks={len(checks)}")
         notes = [row for row in read_jsonl(f"{data_dir}/notes.jsonl") if row.get("note_id")]
+        progress_ui.log(f"  notes={len(notes)}")
         searches = [row for row in read_jsonl(f"{data_dir}/search_results.jsonl") if row.get("result_id")]
+        progress_ui.log(f"  search_results={len(searches)}")
 
         self.accounts_by_id = defaultdict(list)
         self.accounts_by_customer = defaultdict(list)
@@ -1184,7 +1194,9 @@ class Store:
         self._docs = defaultdict(list)
         self._docs_of = defaultdict(set)
         self._person_cache = {}
+        progress_ui.log("  indexing links…")
         self._build_links()
+        progress_ui.log("  store ready")
 
     def _build_links(self):
         approved = defaultdict(list)
@@ -2595,6 +2607,7 @@ def _write_rows(output_path, hits, answered, logs):
 
 def run(data_dir, output_path):
     started = time.time()
+    progress_ui.log(f"system/run {data_dir} -> {output_path}")
     store = None
     try:
         store = Store(data_dir)
@@ -2607,7 +2620,8 @@ def run(data_dir, output_path):
     answered = {}
     logs = []
     blank = {"judge": None, "evaluate": {"agrees": False, "note": "no answer"}, "verify": {"ok": False, "note": "missing"}, "downgraded": True, "name_agree": False, "dob_agree": False}
-    for hit in hits:
+    progress_ui.log(f"resolving {len(hits)} hits")
+    for hit in progress_ui.progress(hits, total=len(hits), desc="resolve", unit="hit"):
         log = dict(blank)
         log["hit_id"] = hit.get("hit_id")
         if store is None:
@@ -2637,6 +2651,7 @@ def run(data_dir, output_path):
             missing = dict(blank)
             missing["hit_id"] = hit["hit_id"]
             logs.append(missing)
+    progress_ui.log(f"writing {output_path}")
     try:
         counts = _write_rows(output_path, hits, answered, logs)
     except Exception as error:
