@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Namesake</title>
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="side">
+    <a class="brand" href="#/overview">
+      <img src="/static/icon.svg" alt="" width="28" height="28">
+      <span><b>Namesake</b><small>Clears the strangers. Keeps the suspects. Shows the record.</small></span>
+    </a>
+    <nav>
+      <a href="#/overview" data-nav="overview">Overview</a>
+      <a href="#/queue?status=needs_you" data-nav="queue">Queue <span class="count" id="nav-needs"></span></a>
+      <a href="#/queue?status=awaiting_approval" data-nav="approvals">Approvals <span class="count" id="nav-approvals"></span></a>
+      <a href="#/runs" data-nav="runs">Runs</a>
+    </nav>
+    <div class="side-foot">
+      <label class="who">Signed in as
+        <input id="analyst" placeholder="Your name" autocomplete="off">
+      </label>
+      <div class="run-pill" id="run-pill">No run open</div>
+      <div class="theme" role="group" aria-label="Theme">
+        <button data-theme="light">Light</button><button data-theme="system">System</button><button data-theme="dark">Dark</button>
+      </div>
+    </div>
+  </aside>
+  <main id="main" tabindex="-1"><div class="loading">Loading…</div></main>
+</div>
+<div class="drawer" id="drawer" aria-hidden="true">
+  <div class="drawer-panel" role="dialog" aria-label="Record">
+    <header><div><small id="drawer-sub">What the auditor sees</small><h3 id="drawer-title"></h3></div><button class="ghost" id="drawer-close" aria-label="Close">✕</button></header>
+    <div id="drawer-body"></div>
+  </div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -24,3 +24,6 @@ output/.llm-cache/
 .test-results/
 gate-evidence/
 .playwright-mcp/
+
+# Analyst workbench runs and actions (local, contain data-room details)
+app/runs/

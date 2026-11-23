@@ -1,0 +1,7 @@
+#!/bin/sh
+# Start the Namesake analyst workbench.
+# Usage: app/run <data folder> [port]
+DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+DATA="${1:?usage: app/run <data folder> [port]}"
+PORT="${2:-8780}"
+exec python3 "$DIR/server.py" --data "$DATA" --port "$PORT"
