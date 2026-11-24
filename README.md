@@ -16,6 +16,11 @@ Why it matters: Analysts spend less time on false positives, and real or borderl
 
 Read [PRINCIPLES.md](PRINCIPLES.md) before changing the rules. Agents should also read [AGENTS.md](AGENTS.md). How the files behave is in [DATA_NOTES.md](DATA_NOTES.md). The engine write-up, diagram, and three cases are in [system/README.md](system/README.md).
 
+
+## Analyst workbench (local app)
+
+`app/run <data folder>` starts a local web app on http://127.0.0.1:8780/ for the analysts who work what the engine leaves for a person: an alert queue, each case with its issues and discrepancies, a per-hit link graph and a whole-data-room **knowledge graph**, maker-checker decisions with an audit trail, and CSV export. It runs the same engine and never changes the scored file. See [app/README.md](app/README.md).
+
 ## Quick start
 
 `dev/` is the data room. It is not in git.

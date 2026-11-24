@@ -663,6 +663,180 @@ class Case:
             node("more:" + hit_id, "search", f"+{len(results) - 5} more results", "namesakes", 6, "namesake")
         return {"nodes": list(nodes.values()), "edges": edges}
 
+
+    # -- knowledge graph (whole data room) ---------------------------------------------
+    def _kg(self):
+        if getattr(self, "_kg_ready", False):
+            return
+        desk = self.desk
+        self.kg_alerts_by_customer = defaultdict(set)
+        self.kg_hits_by_customer = defaultdict(set)
+        for hit_id, row in desk.output.items():
+            ids = [row.get("customer_record_id")] + [e for e in row.get("evidence") or [] if str(e).startswith("CUS-")]
+            for cid in ids:
+                if isinstance(cid, str) and cid.startswith("CUS-"):
+                    self.kg_alerts_by_customer[cid].add(row.get("alert_id"))
+                    self.kg_hits_by_customer[cid].add(hit_id)
+        self.kg_alerts_by_account = defaultdict(set)
+        self.kg_alerts_by_login = defaultdict(set)
+        self.kg_alerts_by_email = defaultdict(set)
+        for alert_id, alert in desk.alerts.items():
+            if alert.get("account_ref"):
+                self.kg_alerts_by_account[alert["account_ref"]].add(alert_id)
+            if alert.get("login_handle"):
+                self.kg_alerts_by_login[str(alert["login_handle"]).lower()].add(alert_id)
+            if alert.get("email"):
+                self.kg_alerts_by_email[str(alert["email"]).lower()].add(alert_id)
+        self.kg_accounts_by_login = defaultdict(set)
+        for customer_id, rows in desk.accounts_by_customer.items():
+            for row in rows:
+                if row.get("login_handle"):
+                    self.kg_accounts_by_login[str(row["login_handle"]).lower()].add(row.get("account_id"))
+        self.kg_phone = defaultdict(list)
+        for record_id, customer in desk.customers.items():
+            digits = re.sub(r"\D", "", customer.get("phone") or "")
+            if len(digits) >= 8:
+                self.kg_phone[digits].append(record_id)
+        self.kg_pairs_by_applicant = defaultdict(list)
+        for (account_id, customer_id), applicants in desk.onboarding.items():
+            for applicant in applicants:
+                self.kg_pairs_by_applicant[applicant].append((account_id, customer_id))
+        self.kg_checks_by_doc = defaultdict(list)
+        for check in desk.kyc.values():
+            number = re.sub(r"\s+", "", str(check.get("document_number") or "")).upper()
+            if len(number) >= 5:
+                self.kg_checks_by_doc[number].append(check.get("check_id"))
+        self.kg_hits_by_key = defaultdict(list)
+        for hit_id, hit in desk.hits.items():
+            try:
+                key = self.engine.search_key(hit.get("name") or "") if self.engine else ""
+            except Exception:
+                key = ""
+            if key:
+                self.kg_hits_by_key[key.lower()].append(hit_id)
+        self._kg_ready = True
+
+    def kg_node(self, node_id):
+        desk = self.desk
+        decisions, _ = self.state()
+        if node_id.startswith("A-") and node_id in desk.alerts:
+            alert = desk.alerts[node_id]
+            status = self.alert_status(node_id, decisions) if node_id in self.by_alert else "cleared"
+            return {"id": node_id, "kind": "alert", "label": (alert.get("customer") or {}).get("name") or node_id,
+                    "sub": f"Alert · {STATUS_LABEL[status]}", "state": status}
+        if node_id.startswith("H-") and node_id in desk.hits:
+            hit = desk.hits[node_id]
+            decision = self.final(node_id, decisions)[0] if node_id in desk.output else ""
+            return {"id": node_id, "kind": "hit", "label": hit.get("name") or node_id,
+                    "sub": f"List hit · {PLAIN.get(decision, '')}", "state": decision}
+        if node_id.startswith("CUS-") and node_id in desk.customers:
+            c = desk.customers[node_id]
+            return {"id": node_id, "kind": "customer", "label": c.get("full_name") or node_id,
+                    "sub": f"Customer · {c.get('dob') or 'no DOB'} · {c.get('residence_country') or ''}", "state": ""}
+        if node_id.startswith("ACC-"):
+            return {"id": node_id, "kind": "account", "label": "Account", "sub": node_id, "state": ""}
+        if node_id.startswith("KYC-") and node_id in desk.kyc:
+            k = desk.kyc[node_id]
+            return {"id": node_id, "kind": "check", "label": f"ID check · {k.get('result')}",
+                    "sub": f"{k.get('verified_name') or ''} · {k.get('checked_at') or ''}", "state": str(k.get("result") or "")}
+        if node_id.startswith("NOTE-") and node_id in desk.notes:
+            n = desk.notes[node_id]
+            return {"id": node_id, "kind": "note", "label": f"Note · {n.get('channel') or ''}", "sub": (n.get("text") or "")[:70], "state": ""}
+        if node_id.startswith("SR-") and node_id in desk.search:
+            r = desk.search[node_id]
+            return {"id": node_id, "kind": "search", "label": "Search result", "sub": (r.get("snippet") or "")[:70], "state": ""}
+        return None
+
+    def kg_neighbours(self, node_id, limit=30):
+        self._kg()
+        desk = self.desk
+        out = []
+
+        def add(other, rel, style=""):
+            if other and other != node_id and len(out) < limit:
+                node = self.kg_node(other)
+                if node:
+                    out.append({"node": node, "rel": rel, "style": style})
+
+        if node_id.startswith("A-"):
+            alert = desk.alerts.get(node_id) or {}
+            for hit_id in alert.get("hit_ids") or self.by_alert.get(node_id, []):
+                add(hit_id, "hit on this alert")
+            if alert.get("account_ref"):
+                add(alert["account_ref"], "screened via account")
+            if alert.get("login_handle"):
+                for account_id in sorted(self.kg_accounts_by_login.get(str(alert["login_handle"]).lower(), [])):
+                    add(account_id, "screened via login")
+            if alert.get("email"):
+                for cid in desk.by_email.get(str(alert["email"]).lower(), []):
+                    add(cid, "screened via email")
+            seen = set()
+            for hit_id in self.by_alert.get(node_id, []):
+                cid = desk.output[hit_id].get("customer_record_id")
+                if isinstance(cid, str) and cid.startswith("CUS-") and cid not in seen:
+                    seen.add(cid)
+                    add(cid, "resolved to", "strong")
+        elif node_id.startswith("H-"):
+            hit = desk.hits.get(node_id) or {}
+            row = desk.output.get(node_id) or {}
+            add(hit.get("alert_id"), "listed on alert")
+            evidence = set(row.get("evidence") or [])
+            cid = row.get("customer_record_id")
+            if isinstance(cid, str) and cid.startswith("CUS-"):
+                add(cid, "compared with", "strong")
+            for e in sorted(evidence):
+                if not e.startswith("SR-") and e != cid:
+                    add(e, "decided by", "strong")
+            key = ""
+            try:
+                key = self.engine.search_key(hit.get("name") or "") if self.engine else ""
+            except Exception:
+                pass
+            for result in self.search_by_key.get((key or "").lower(), [])[:12]:
+                rid = result.get("result_id")
+                add(rid, "about this person" if rid in evidence else "namesake result", "strong" if rid in evidence else "muted")
+        elif node_id.startswith("CUS-"):
+            customer = desk.customers.get(node_id) or {}
+            for alert_id in sorted(self.kg_alerts_by_customer.get(node_id, [])):
+                add(alert_id, "screened in alert", "strong")
+            for row in desk.accounts_by_customer.get(node_id, []):
+                add(row.get("account_id"), "holds account")
+            for check in self._checks(node_id):
+                add(check.get("check_id"), f"ID check ({check.get('result')})", "" if str(check.get("result")).lower() == "approved" else "muted")
+            for note in desk.notes_by_email.get(str(customer.get("email") or "").lower(), [])[:8]:
+                add(note.get("note_id"), "support note")
+            digits = re.sub(r"\D", "", customer.get("phone") or "")
+            own_dob = desk.customer_dob_iso.get(node_id)
+            for other in self.kg_phone.get(digits, [])[:10]:
+                if other != node_id:
+                    same = own_dob and desk.customer_dob_iso.get(other) == own_dob
+                    add(other, "same person (phone + date of birth)" if same else "shares a phone only", "merge" if same else "muted")
+            for number in desk.docs_of.get(node_id, ()):
+                for other in desk.docs.get(number, []):
+                    add(other, f"same document {number}", "merge")
+        elif node_id.startswith("ACC-"):
+            for cid in dict.fromkeys(desk.accounts.get(node_id, [])):
+                add(cid, "account holder")
+            for alert_id in sorted(self.kg_alerts_by_account.get(node_id, [])):
+                add(alert_id, "alert screened via this account")
+        elif node_id.startswith("KYC-"):
+            check = desk.kyc.get(node_id) or {}
+            for account_id, cid in self.kg_pairs_by_applicant.get(check.get("applicant_id"), []):
+                add(cid, "check for customer")
+                add(account_id, "opened account")
+            number = re.sub(r"\s+", "", str(check.get("document_number") or "")).upper()
+            for other in self.kg_checks_by_doc.get(number, []):
+                add(other, "same document number", "merge")
+        elif node_id.startswith("NOTE-"):
+            note = desk.notes.get(node_id) or {}
+            for cid in desk.by_email.get(str(note.get("requester_email") or "").lower(), []):
+                add(cid, "note about customer")
+        elif node_id.startswith("SR-"):
+            result = desk.search.get(node_id) or {}
+            for hit_id in self.kg_hits_by_key.get(str(result.get("query") or "").lower(), [])[:10]:
+                add(hit_id, "search result for hit")
+        return out
+
     # -- writes ----------------------------------------------------------------------
     def decide(self, payload):
         hit_id = payload.get("hit_id")
@@ -836,6 +1010,12 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/alert/"):
             detail = case.alert_detail(path.rsplit("/", 1)[-1])
             return self._json(detail) if detail else self._json({"error": "Unknown alert"}, 404)
+        if path.startswith("/api/kg/"):
+            node_id = urllib.parse.unquote(path.rsplit("/", 1)[-1]).strip().upper()
+            node = case.kg_node(node_id)
+            if not node:
+                return self._json({"error": f"{node_id} is not in this data folder"}, 404)
+            return self._json({"node": node, "neighbours": case.kg_neighbours(node_id)})
         if path.startswith("/api/record/"):
             record = case.desk.raw_record(urllib.parse.unquote(path.rsplit("/", 1)[-1]))
             return self._json(record) if record else self._json({"error": "Not in this data folder"}, 404)
@@ -890,8 +1070,15 @@ def main():
     if args.data:
         DEFAULT_DATA = Path(args.data).expanduser().resolve()
     runs = [r for r in RUNS_STATE.list() if r.get("state") == "done"]
+    committed = ROOT / "output" / "dev.jsonl"
+    if not runs and not args.import_output and DEFAULT_DATA and committed.is_file():
+        # First start: open the committed dev predictions straight away if they belong to this data folder.
+        hit_ids = {row.get("hit_id") for row in read_jsonl(DEFAULT_DATA / "hits.jsonl")}
+        out_ids = {row.get("hit_id") for row in read_jsonl(committed)}
+        if out_ids and out_ids == hit_ids:
+            args.import_output = str(committed)
     if args.import_output and DEFAULT_DATA:
-        meta = RUNS_STATE.import_output(DEFAULT_DATA, args.import_output, f"Imported {Path(args.import_output).name}")
+        meta = RUNS_STATE.import_output(DEFAULT_DATA, args.import_output, "Committed output/dev.jsonl" if Path(args.import_output).resolve() == committed.resolve() else f"Imported {Path(args.import_output).name}")
         runs = [meta] + runs
     if runs:
         CURRENT["run_id"] = runs[0]["run_id"]
