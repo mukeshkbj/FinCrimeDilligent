@@ -58,10 +58,11 @@ async function route() {
   await refreshState().catch(() => {});
   const main = $("#main");
   try {
-    if (!ui.state.ready && parts[0] !== "runs") return renderRuns(main);
+    if (!ui.state.ready && parts[0] !== "runs") { setNav("runs"); return renderRuns(main, "No screening run is open yet. Run one below (about 10 seconds), then every page works."); }
     if (parts[0] === "queue") { setNav(params.get("status") === "awaiting_approval" ? "approvals" : "queue"); return renderQueue(main, params); }
     if (parts[0] === "alert") { setNav("queue"); return renderAlert(main, parts[1], params.get("hit")); }
     if (parts[0] === "runs") { setNav("runs"); return renderRuns(main); }
+    if (parts[0] === "graph") { setNav("graph"); return renderKG(main, params.get("focus")); }
     setNav("overview"); return renderOverview(main);
   } catch (e) {
     main.innerHTML = `<div class="card card-pad"><h2>Something went wrong</h2><p>${esc(e.message)}</p><a href="#/runs">Go to Runs</a></div>`;
@@ -128,7 +129,12 @@ async function renderAlert(main, alertId, hitId) {
   ui.alert = d;
   const hit = d.hits.find((h) => h.hit_id === hitId) || d.hits.find((h) => h.final.decision === "REVIEW") || d.hits[0];
   ui.hit = hit.hit_id;
-  const queue = JSON.parse(store.get("ns-queue", "{}") || "{}");
+  let queue = JSON.parse(store.get("ns-queue", "{}") || "{}");
+  if ((queue.ids || []).indexOf(alertId) < 0) {
+    const all = await api(`/api/alerts?status=${d.status}`);
+    queue = { status: d.status, q: "", ids: all.alerts.map((a) => a.alert_id) };
+    store.set("ns-queue", JSON.stringify(queue));
+  }
   const pos = (queue.ids || []).indexOf(alertId);
   const prev = pos > 0 ? queue.ids[pos - 1] : null, next = pos >= 0 && pos < queue.ids.length - 1 ? queue.ids[pos + 1] : null;
   const scr = d.alert.customer || {};
@@ -137,7 +143,7 @@ async function renderAlert(main, alertId, hitId) {
   <div class="case-head"><div><h1>${esc(scr.name || alertId)}</h1>
     <div class="case-meta">${pill(d.status)}<span class="code">${alertId}</span><span>${esc(scr.entity_type || "")}</span><span>Screened ${esc(d.alert.screened_at || "")}</span><span>${d.hits.length} hit(s)</span></div></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="req">Draft information request</button>
-      <a class="btn ${prev ? "" : "disabled"}" ${prev ? `href="#/alert/${prev}"` : ""}>‹ Previous</a><a class="btn ${next ? "" : "disabled"}" ${next ? `href="#/alert/${next}"` : ""}>Next ›</a></div></div>
+      <a class="btn ${prev ? "" : "disabled"}" ${prev ? `href="#/alert/${prev}"` : ""} title="Previous alert in ${esc(STATUS[queue.status] || "the queue")}">‹ Previous</a><a class="btn ${next ? "" : "disabled"}" ${next ? `href="#/alert/${next}"` : ""} title="Next alert in ${esc(STATUS[queue.status] || "the queue")}">Next ›</a></div></div>
   <div class="case-grid">
     <div class="card hitlist">${d.hits.map((h) => {
       const open = h.issues.filter((i) => i.severity !== "info" && ["open", "requested"].includes(i.status)).length;
@@ -327,15 +333,127 @@ function renderGraph(body, g) {
   const heads = COLS.map((c, i) => `<text class="g-col" x="${LEFT + i * (W + GX)}" y="22">${c}</text>`).join("");
   body.innerHTML = `<p class="by" style="margin-top:0">How this alert reaches the customer and the listed person. Click any box to open its record.</p>
     <div class="graph-wrap"><svg class="graph" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" style="max-width:100%;height:auto;min-width:900px">${heads}${edges}${nodes}</svg></div>
-    <div class="graph-key"><span><i></i>cited in the decision</span><span><i class="m"></i>same person (phone + date of birth, or document)</span><span><i class="x"></i>not used: other holder, rejected check, namesake</span></div>`;
+    <div class="graph-key"><a class="btn small" href="#/graph?focus=${esc((g.nodes.find((n) => n.kind === "hit") || {}).id || "")}">Explore in knowledge graph</a><span><i></i>cited in the decision</span><span><i class="m"></i>same person (phone + date of birth, or document)</span><span><i class="x"></i>not used: other holder, rejected check, namesake</span></div>`;
   body.querySelectorAll(".g-node").forEach((el) => el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") el.dispatchEvent(new Event("click", { bubbles: true })); }));
 }
 
+
+/* ---------- knowledge graph (whole data room) ---------- */
+const KG_COLORS = { alert: "#2f6fdf", hit: "#7a4cc2", customer: "#137a4b", account: "#5c6b80", check: "#a35d00", note: "#8a6d3b", search: "#94a0b4" };
+const KG_EXAMPLES = [["A-0487B9", "Two records, one person"], ["CUS-377745", "Joint account, shared phone"], ["A-D81CF0", "15 hits on one alert"], ["H-FF3096", "Hit left for review"]];
+const kg = { nodes: new Map(), edges: new Map(), expanded: new Set(), selected: null, scale: 1, tx: 0, ty: 0 };
+
+async function renderKG(main, focus) {
+  focus = (focus || "A-0487B9").toUpperCase();
+  main.innerHTML = `
+  <div class="page-head"><div><h1>Knowledge graph</h1><p>Every customer, account, identity check, note, alert, list hit and search result, and how they connect. Click a node to see it; double-click (or Expand) to bring in its connections.</p></div>
+    <div style="display:flex;gap:8px"><input class="field search" id="kg-q" placeholder="Any id: CUS-, ACC-, KYC-, NOTE-, A-, H-, SR-" value="${esc(focus)}"><button class="btn primary" id="kg-go">Show</button></div></div>
+  <div class="kg-examples">Try: ${KG_EXAMPLES.map(([id, t]) => `<a href="#/graph?focus=${id}">${t} <span class="code">${id}</span></a>`).join("")}</div>
+  <div class="kg-grid">
+    <div class="card kg-canvas"><svg id="kg-svg" class="graph"></svg>
+      <div class="kg-tools"><button class="btn small" id="kg-fit">Fit</button><button class="btn small" id="kg-reset">Start again</button><span class="by" id="kg-count"></span></div></div>
+    <div class="card card-pad kg-side" id="kg-side"></div>
+  </div>
+  <div class="graph-key">${Object.entries(KG_COLORS).map(([k, c]) => `<span><b style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${c};margin-right:5px"></b>${k}</span>`).join("")}
+    <span><i class="m"></i>same person</span><span><i class="x"></i>not the same / not used</span></div>`;
+  $("#kg-go").onclick = () => (location.hash = `#/graph?focus=${encodeURIComponent($("#kg-q").value.trim())}`);
+  $("#kg-q").onkeydown = (e) => { if (e.key === "Enter") $("#kg-go").click(); };
+  $("#kg-fit").onclick = () => { kgFit(); kgDraw(); };
+  $("#kg-reset").onclick = () => { kgClear(); kgExpand(focus, true); };
+  if (!kg.nodes.has(focus)) kgClear();
+  await kgExpand(focus, true);
+}
+function kgClear() { kg.nodes.clear(); kg.edges.clear(); kg.expanded.clear(); kg.selected = null; }
+async function kgExpand(id, select) {
+  let d;
+  try { d = await api(`/api/kg/${encodeURIComponent(id)}`); }
+  catch (e) { toast(e.message, true); return; }
+  const base = kg.nodes.get(d.node.id);
+  if (!base) kg.nodes.set(d.node.id, { ...d.node, x: 0, y: 0, vx: 0, vy: 0 });
+  const c = kg.nodes.get(d.node.id);
+  d.neighbours.forEach((nb, i) => {
+    if (!kg.nodes.has(nb.node.id)) {
+      const a = (2 * Math.PI * i) / Math.max(d.neighbours.length, 1);
+      kg.nodes.set(nb.node.id, { ...nb.node, x: c.x + 140 * Math.cos(a), y: c.y + 140 * Math.sin(a), vx: 0, vy: 0 });
+    }
+    const key = [d.node.id, nb.node.id].sort().join("|");
+    if (!kg.edges.has(key)) kg.edges.set(key, { a: d.node.id, b: nb.node.id, rel: nb.rel, style: nb.style });
+  });
+  kg.expanded.add(d.node.id);
+  if (select) kg.selected = d.node.id;
+  kgLayout(); kgFit(); kgDraw(); kgSide();
+}
+function kgLayout() {
+  const ns = [...kg.nodes.values()], es = [...kg.edges.values()];
+  for (let it = 0; it < 260; it++) {
+    const t = 1 - it / 260;
+    for (let i = 0; i < ns.length; i++) for (let j = i + 1; j < ns.length; j++) {
+      const a = ns[i], b = ns[j]; let dx = a.x - b.x, dy = a.y - b.y; let d2 = dx * dx + dy * dy || 0.01;
+      const f = 9000 / d2, d = Math.sqrt(d2); dx /= d; dy /= d;
+      a.vx += dx * f; a.vy += dy * f; b.vx -= dx * f; b.vy -= dy * f;
+    }
+    es.forEach((e) => {
+      const a = kg.nodes.get(e.a), b = kg.nodes.get(e.b); if (!a || !b) return;
+      const dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx * dx + dy * dy) || 1, f = (d - 150) * 0.04;
+      a.vx += (dx / d) * f; a.vy += (dy / d) * f; b.vx -= (dx / d) * f; b.vy -= (dy / d) * f;
+    });
+    ns.forEach((n) => { n.vx -= n.x * 0.002; n.vy -= n.y * 0.002; n.x += Math.max(-30, Math.min(30, n.vx)) * t; n.y += Math.max(-30, Math.min(30, n.vy)) * t; n.vx *= 0.5; n.vy *= 0.5; });
+  }
+}
+function kgFit() {
+  const ns = [...kg.nodes.values()]; if (!ns.length) return;
+  const svg = $("#kg-svg"), W = svg.clientWidth || 900, H = svg.clientHeight || 620;
+  const xs = ns.map((n) => n.x), ys = ns.map((n) => n.y);
+  const minX = Math.min(...xs) - 90, maxX = Math.max(...xs) + 90, minY = Math.min(...ys) - 50, maxY = Math.max(...ys) + 50;
+  kg.scale = Math.min(1.4, W / (maxX - minX), H / (maxY - minY));
+  kg.tx = W / 2 - ((minX + maxX) / 2) * kg.scale; kg.ty = H / 2 - ((minY + maxY) / 2) * kg.scale;
+}
+function kgDraw() {
+  const svg = $("#kg-svg"); if (!svg) return;
+  const clip = (s, k) => (s && s.length > k ? s.slice(0, k - 1) + "…" : s || "");
+  const P = (n) => [n.x * kg.scale + kg.tx, n.y * kg.scale + kg.ty];
+  const sel = kg.selected;
+  const edges = [...kg.edges.values()].map((e) => {
+    const a = kg.nodes.get(e.a), b = kg.nodes.get(e.b); if (!a || !b) return "";
+    const [x1, y1] = P(a), [x2, y2] = P(b), on = sel && (e.a === sel || e.b === sel);
+    return `<line class="g-edge ${e.style || ""} ${on ? "decided" : ""}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"><title>${esc(e.rel)}</title></line>
+      ${on ? `<text class="g-label" x="${(x1 + x2) / 2}" y="${(y1 + y2) / 2 - 4}" text-anchor="middle">${esc(clip(e.rel, 34))}</text>` : ""}`;
+  }).join("");
+  const nodes = [...kg.nodes.values()].map((n) => {
+    const [x, y] = P(n), r = n.id === sel ? 13 : 10, col = KG_COLORS[n.kind] || "#888";
+    const dim = n.kind === "check" && n.state && n.state !== "approved";
+    return `<g class="kg-node ${n.id === sel ? "sel" : ""}" data-kg="${esc(n.id)}" tabindex="0" role="button" aria-label="${esc(n.label)} ${esc(n.id)}">
+      <circle cx="${x}" cy="${y}" r="${r}" fill="${col}" ${dim ? 'fill-opacity=".35"' : ""} stroke="${kg.expanded.has(n.id) ? "var(--ink)" : "var(--surface)"}" stroke-width="2.5"/>
+      <text class="kg-t" x="${x}" y="${y + r + 13}" text-anchor="middle">${esc(clip(n.label, 22))}</text>
+      <text class="kg-s" x="${x}" y="${y + r + 25}" text-anchor="middle">${esc(n.id)}</text></g>`;
+  }).join("");
+  svg.innerHTML = edges + nodes;
+  $("#kg-count").textContent = `${kg.nodes.size} nodes · ${kg.edges.size} links`;
+  svg.querySelectorAll(".kg-node").forEach((g) => {
+    g.onclick = () => { kg.selected = g.dataset.kg; kgDraw(); kgSide(); };
+    g.ondblclick = () => kgExpand(g.dataset.kg, true);
+    g.onkeydown = (e) => { if (e.key === "Enter") kgExpand(g.dataset.kg, true); else if (e.key === " ") { e.preventDefault(); g.onclick(); } };
+  });
+}
+async function kgSide() {
+  const side = $("#kg-side"), n = kg.nodes.get(kg.selected); if (!side || !n) return;
+  const links = [...kg.edges.values()].filter((e) => e.a === n.id || e.b === n.id)
+    .map((e) => { const o = kg.nodes.get(e.a === n.id ? e.b : e.a); return `<li><a href="#" data-pick="${esc(o.id)}">${esc(o.label)}</a> <span class="code">${esc(o.id)}</span><div class="by">${esc(e.rel)}</div></li>`; }).join("");
+  const open = n.id.startsWith("A-") ? `#/alert/${n.id}` : n.id.startsWith("H-") ? `#/alert/${(ui.alertOfHit || {})[n.id] || ""}` : "";
+  side.innerHTML = `<div class="by">${esc(n.kind)}</div><h2 style="margin:2px 0 4px">${esc(n.label)}</h2><div class="code">${esc(n.id)}</div><p class="by">${esc(n.sub)}</p>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin:10px 0">${kg.expanded.has(n.id) ? `<span class="pill d-DIFFERENT_ENTITY">Expanded</span>` : `<button class="btn small primary" id="kg-exp">Expand connections</button>`}
+      <button class="btn small" data-rec="${esc(n.id)}">Open record</button>${n.id.startsWith("A-") ? `<a class="btn small" href="${open}">Open case</a>` : ""}</div>
+    <h4 style="margin:14px 0 6px;font-size:13px;color:var(--ink-3)">Connections shown (${links ? links.split("<li>").length - 1 : 0})</h4><ul class="activity">${links}</ul>`;
+  const ex = $("#kg-exp"); if (ex) ex.onclick = () => kgExpand(n.id, true);
+  side.querySelectorAll("[data-pick]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); kg.selected = a.dataset.pick; kgDraw(); kgSide(); }));
+}
+window.addEventListener("resize", () => { if ($("#kg-svg")) { kgFit(); kgDraw(); } });
+
 /* ---------- runs ---------- */
-async function renderRuns(main) {
+async function renderRuns(main, notice) {
   setNav("runs");
   const s = ui.state || (await api("/api/state"));
-  main.innerHTML = `
+  main.innerHTML = `${notice ? `<div class="notice">${esc(notice)}</div>` : ""}
   <div class="page-head"><div><h1>Runs</h1><p>Each run screens a data folder with the scored engine (<span class="code">system/run</span>) and keeps its own analyst actions.</p></div></div>
   <div class="card card-pad"><h2>New screening run</h2>
     <div style="display:flex;gap:8px;flex-wrap:wrap"><input class="field" id="data" style="flex:1;min-width:300px" placeholder="/path/to/data folder (the one with hits.jsonl)" value="${esc(s.default_data || "")}">
@@ -359,7 +477,7 @@ async function renderRuns(main) {
 }
 async function pollJob() {
   const s = await api("/api/state"), j = s.job, box = $("#job");
-  if (!box) return;
+  if (!box) { if (j.state === "running") setTimeout(pollJob, 1000); else if (j.state === "done") refreshState(); return; }
   if (j.state === "running") {
     const pct = j.total ? Math.round((100 * j.done) / j.total) : 3;
     box.innerHTML = `<div class="progress"><span style="width:${pct}%"></span></div><div class="by">${esc(j.phase || "Starting")}${j.total ? ` · ${j.done} of ${j.total} hits` : ""}</div>`;
@@ -389,6 +507,8 @@ async function openRecord(id) {
 
 /* ---------- boot ---------- */
 document.addEventListener("click", (e) => {
+  const link = e.target.closest('a[href^="#"]');
+  if (link && link.getAttribute("href") === location.hash) { e.preventDefault(); ui.choice = null; route(); return; }
   const rec = e.target.closest("[data-rec]");
   if (rec) { e.preventDefault(); openRecord(rec.dataset.rec); }
 });

@@ -7,6 +7,7 @@ changing the scored file.
 
 ```bash
 app/run <data folder>            # then open http://127.0.0.1:8780/
+# first start opens the committed output/dev.jsonl straight away when it matches the data folder
 # or, to open an existing output file without re-running the engine:
 python3 app/server.py --data <data folder> --import-output output/dev.jsonl
 ```
@@ -22,6 +23,7 @@ every action is signed with it.
 | **Queue** | Alerts sorted by what needs a person. An alert closes only when every hit is a different person. Search by name, alert or hit id. Export the final decisions as CSV. |
 | **Case** | One alert, every hit: the engine's decision and reason with clickable record ids, then four tabs: **Issues**, **Link graph**, **Evidence trail** and **Analyst memo**. |
 | **Approvals** | Decisions made by one analyst and waiting for a second (maker-checker). |
+| **Knowledge graph** | The whole data room as a graph: search any customer, account, ID check, note, alert, hit or search result and expand its connections — shared phones (same person or not), same document numbers, joint accounts, the alerts a customer appears in, and a hit's namesake search results. |
 | **Runs** | Screen a new data folder with `system/run`, watch progress, and switch between runs. |
 
 ### Issues and discrepancies
